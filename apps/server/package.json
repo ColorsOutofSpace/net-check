@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "echo \"No server tests yet\""
+    "test": "tsc -p tsconfig.test.json && node dist-test/test/server/runner.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -22,4 +22,3 @@
     "typescript": "^5.8.2"
   }
 }
-

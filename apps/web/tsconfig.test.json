@@ -1,0 +1,26 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "outDir": "../../test-dist/web",
+    "noEmit": false,
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "lib": [
+      "ES2022"
+    ],
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "src/analysis.ts",
+    "../../test/web/**/*.ts"
+  ],
+  "exclude": [
+    "../../test-dist",
+    "node_modules"
+  ]
+}
+

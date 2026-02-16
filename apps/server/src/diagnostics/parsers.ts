@@ -1,6 +1,7 @@
 ﻿type ParseResult = {
   structured: Record<string, string | number | boolean>;
   diagnosis: string[];
+  evidence?: string[];
 };
 
 const isUnsupportedPlatformOutput = (output: string): boolean =>
@@ -20,6 +21,24 @@ const parseUnsupportedPlatform = (output: string): ParseResult => {
 };
 
 const unique = (values: string[]): string[] => [...new Set(values)];
+
+const normalizeParseResult = (result: ParseResult): ParseResult => {
+  if (result.evidence && result.evidence.length > 0) {
+    return result;
+  }
+
+  const evidence: string[] = [];
+  result.diagnosis.slice(0, 3).forEach((item) => evidence.push(item));
+
+  Object.entries(result.structured)
+    .slice(0, 4)
+    .forEach(([key, value]) => evidence.push(`${key}=${String(value)}`));
+
+  return {
+    ...result,
+    evidence
+  };
+};
 
 const parsePing = (output: string): ParseResult => {
   const structured: Record<string, string | number | boolean> = {};
@@ -380,10 +399,11 @@ const parseIeProxyCheck = (output: string): ParseResult => {
   const structured: Record<string, string | number | boolean> = {};
   const diagnosis: string[] = [];
 
-  const proxyEnableMatch = output.match(/ProxyEnable\s*:\s*(\d+)/i);
-  const proxyServerMatch = output.match(/ProxyServer\s*:\s*([^\r\n]*)/i);
-  const autoConfigUrlMatch = output.match(/AutoConfigURL\s*:\s*([^\r\n]*)/i);
-  const autoDetectMatch = output.match(/AutoDetect\s*:\s*(\d+)/i);
+  // Use whitespace patterns that do not cross line boundaries.
+  const proxyEnableMatch = output.match(/ProxyEnable[^\S\r\n]*:[^\S\r\n]*(\d+)/i);
+  const proxyServerMatch = output.match(/ProxyServer[^\S\r\n]*:[^\S\r\n]*([^\r\n]*)/i);
+  const autoConfigUrlMatch = output.match(/AutoConfigURL[^\S\r\n]*:[^\S\r\n]*([^\r\n]*)/i);
+  const autoDetectMatch = output.match(/AutoDetect[^\S\r\n]*:[^\S\r\n]*(\d+)/i);
 
   const proxyEnabled = proxyEnableMatch ? Number(proxyEnableMatch[1]) === 1 : false;
   const proxyServer = (proxyServerMatch?.[1] ?? "").trim();
@@ -483,72 +503,48 @@ const parseNetworkEnvVars = (output: string): ParseResult => {
 
 export const parseCommandOutput = (commandId: string, output: string, exitCode: number | null): ParseResult => {
   if (isUnsupportedPlatformOutput(output)) {
-    return parseUnsupportedPlatform(output);
+    return normalizeParseResult(parseUnsupportedPlatform(output));
   }
+
+  let parsed: ParseResult;
 
   if (commandId === "ping_target") {
-    return parsePing(output);
+    parsed = parsePing(output);
+  } else if (commandId === "dns_lookup") {
+    parsed = parseDnsLookup(output);
+  } else if (commandId === "trace_route") {
+    parsed = parseTraceRoute(output);
+  } else if (commandId === "default_route_check") {
+    parsed = parseDefaultRouteCheck(output);
+  } else if (commandId === "global_internet_icmp") {
+    parsed = parseGlobalInternetIcmp(output);
+  } else if (commandId === "global_dns_probe") {
+    parsed = parseGlobalDnsProbe(output);
+  } else if (commandId === "http_head") {
+    parsed = parseHttp(output);
+  } else if (commandId === "nic_link_status") {
+    parsed = parseNicLinkStatus(output);
+  } else if (commandId === "nic_ip_config") {
+    parsed = parseNicIpConfig(output);
+  } else if (commandId === "dhcp_status") {
+    parsed = parseDhcpStatus(output);
+  } else if (commandId === "dns_server_config") {
+    parsed = parseDnsServerConfig(output);
+  } else if (commandId === "hosts_file_check") {
+    parsed = parseHostsFileCheck(output);
+  } else if (commandId === "lsp_catalog_check") {
+    parsed = parseLspCatalogCheck(output);
+  } else if (commandId === "ie_proxy_check") {
+    parsed = parseIeProxyCheck(output);
+  } else if (commandId === "network_env_vars") {
+    parsed = parseNetworkEnvVars(output);
+  } else {
+    parsed = {
+      structured: { exitCode: exitCode ?? -1 },
+      diagnosis: ["命令执行完成，当前命令暂无结构化解析规则。"]
+    };
   }
 
-  if (commandId === "dns_lookup") {
-    return parseDnsLookup(output);
-  }
-
-  if (commandId === "trace_route") {
-    return parseTraceRoute(output);
-  }
-
-  if (commandId === "default_route_check") {
-    return parseDefaultRouteCheck(output);
-  }
-
-  if (commandId === "global_internet_icmp") {
-    return parseGlobalInternetIcmp(output);
-  }
-
-  if (commandId === "global_dns_probe") {
-    return parseGlobalDnsProbe(output);
-  }
-
-  if (commandId === "http_head") {
-    return parseHttp(output);
-  }
-
-  if (commandId === "nic_link_status") {
-    return parseNicLinkStatus(output);
-  }
-
-  if (commandId === "nic_ip_config") {
-    return parseNicIpConfig(output);
-  }
-
-  if (commandId === "dhcp_status") {
-    return parseDhcpStatus(output);
-  }
-
-  if (commandId === "dns_server_config") {
-    return parseDnsServerConfig(output);
-  }
-
-  if (commandId === "hosts_file_check") {
-    return parseHostsFileCheck(output);
-  }
-
-  if (commandId === "lsp_catalog_check") {
-    return parseLspCatalogCheck(output);
-  }
-
-  if (commandId === "ie_proxy_check") {
-    return parseIeProxyCheck(output);
-  }
-
-  if (commandId === "network_env_vars") {
-    return parseNetworkEnvVars(output);
-  }
-
-  return {
-    structured: { exitCode: exitCode ?? -1 },
-    diagnosis: ["命令执行完成，当前命令暂无结构化解析规则。"]
-  };
+  return normalizeParseResult(parsed);
 };
 

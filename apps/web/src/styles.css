@@ -52,24 +52,30 @@ body,
 }
 
 .sidebar-resizer {
+  position: relative;
   width: 8px;
-  background: linear-gradient(180deg, #2f2f2f 0%, #303030 100%);
-  border-left: 1px solid #2f2f2f;
-  border-right: 1px solid #2f2f2f;
+  background: transparent;
   cursor: col-resize;
-  transition: background 120ms ease, border-color 120ms ease;
 }
 
-.sidebar-resizer:hover {
-  background: linear-gradient(180deg, #3a3a3a 0%, #3d3d3d 100%);
-  border-left-color: var(--splitter);
-  border-right-color: var(--splitter);
+.sidebar-resizer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--splitter);
+  transition: background 120ms ease;
 }
 
-.sidebar-resizer.active {
+.sidebar-resizer:hover::before {
+  background: #6f6f6f;
+}
+
+.sidebar-resizer.active::before {
   background: var(--splitter-active);
-  border-left-color: var(--splitter-active);
-  border-right-color: var(--splitter-active);
 }
 
 .sidebar-header {
@@ -697,23 +703,38 @@ body,
 .workflow-list,
 .panel,
 .terminal {
+  scrollbar-width: none;
+}
+
+.command-list.is-scrolling,
+.workflow-list.is-scrolling,
+.panel.is-scrolling,
+.terminal.is-scrolling {
   scrollbar-width: thin;
-  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+  scrollbar-color: var(--scroll-thumb) transparent;
 }
 
 .command-list::-webkit-scrollbar,
 .workflow-list::-webkit-scrollbar,
 .panel::-webkit-scrollbar,
 .terminal::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 0;
+  height: 0;
+}
+
+.command-list.is-scrolling::-webkit-scrollbar,
+.workflow-list.is-scrolling::-webkit-scrollbar,
+.panel.is-scrolling::-webkit-scrollbar,
+.terminal.is-scrolling::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
 
 .command-list::-webkit-scrollbar-track,
 .workflow-list::-webkit-scrollbar-track,
 .panel::-webkit-scrollbar-track,
 .terminal::-webkit-scrollbar-track {
-  background: var(--scroll-track);
+  background: transparent;
   border-radius: 999px;
 }
 
@@ -721,8 +742,9 @@ body,
 .workflow-list::-webkit-scrollbar-thumb,
 .panel::-webkit-scrollbar-thumb,
 .terminal::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, #5e5e5e 0%, #4a4a4a 100%);
-  border: 2px solid var(--scroll-track);
+  background: linear-gradient(180deg, rgba(130, 130, 130, 0.85) 0%, rgba(95, 95, 95, 0.85) 100%);
+  border: 2px solid transparent;
+  background-clip: padding-box;
   border-radius: 999px;
 }
 

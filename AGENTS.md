@@ -6,6 +6,7 @@ This repository is a local-first network diagnostics workspace with a VSCode-sty
 - `apps/web/`: React + TypeScript frontend (left command panel, right output/analysis panel).
 - `apps/server/`: Node.js + TypeScript backend (whitelisted command execution, SSE streaming, parsers).
 - `docs/`: architecture and design notes.
+- `test/`: test code and shared fixtures (integration/E2E, cross-module cases).
 - `README.md`: quick start and usage overview.
 
 Keep UI concerns in `apps/web` and diagnostic execution/parsing in `apps/server`.
@@ -28,7 +29,11 @@ Run commands from repository root:
 - Keep command execution restricted to `definitions.ts`; do not execute arbitrary shell input.
 
 ## Testing Guidelines
-- Add tests alongside source as `*.test.ts` / `*.test.tsx`.
+- Add unit tests under `test/server` and `test/web` (use `*.test.ts` naming); keep them deterministic and based on sample outputs.
+- After making code changes, run the relevant tests and confirm they pass before proceeding to the next step.
+  - If you changed server logic: `npm run test -w apps/server`
+  - If you changed web logic: `npm run test -w apps/web`
+  - If you changed both: `npm run test`
 - Prioritize parser, rule-evaluator, and API contract tests.
 - For command execution changes, validate timeout/error handling and stream completion behavior.
 - Keep tests deterministic; avoid depending on unstable public endpoints where possible.

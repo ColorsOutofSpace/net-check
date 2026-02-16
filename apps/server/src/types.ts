@@ -38,6 +38,7 @@ export interface JobSnapshot {
   rawOutput: string;
   structured: Record<string, string | number | boolean>;
   diagnosis: string[];
+  evidence: string[];
 }
 
 export type StreamEventType = "start" | "log" | "error" | "complete";

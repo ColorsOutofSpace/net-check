@@ -1,38 +1,17 @@
 ﻿
 import { type CSSProperties, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createJob, fetchCommands, subscribeJob } from "./api";
+import {
+  buildSummary,
+  hasWarning,
+  type LayerDefinition,
+  type LayerStatus,
+  type WorkflowItem,
+  type WorkflowStatus
+} from "./analysis";
 import { CommandDefinition, JobSnapshot, StreamEvent } from "./types";
 
 type PanelTab = "overview" | "output";
-type WorkflowStatus = "pending" | "running" | "completed" | "failed";
-type LayerStatus = "pending" | "running" | "passed" | "warning" | "failed";
-
-interface WorkflowItem {
-  commandId: string;
-  commandTitle: string;
-  category: string;
-  status: WorkflowStatus;
-  startedAt?: string;
-  endedAt?: string;
-  durationMs?: number;
-  timedOut: boolean;
-  diagnosis: string[];
-  structured: Record<string, string | number | boolean>;
-  errorMessage?: string;
-}
-
-interface LayerSummary {
-  id: string;
-  label: string;
-  status: LayerStatus;
-  note: string;
-}
-
-interface RootCause {
-  title: string;
-  evidence: string;
-  severity: "high" | "medium" | "low";
-}
 
 const orderStorageKey = "net-check.one-click-order.v1";
 const concurrencyStorageKey = "net-check.one-click-concurrency.v1";
@@ -81,7 +60,7 @@ const globalPresetIds = [
   "global_dns_probe"
 ];
 
-const layerDefinitions = [
+const layerDefinitions: LayerDefinition[] = [
   { id: "adapter", label: "适配器", commandIds: ["nic_link_status", "nic_ip_config", "dhcp_status"] },
   { id: "route", label: "路由", commandIds: ["default_route_check", "trace_route"] },
   { id: "dns", label: "DNS", commandIds: ["dns_server_config", "hosts_file_check", "dns_lookup", "global_dns_probe"] },
@@ -128,42 +107,6 @@ const formatDuration = (durationMs?: number): string => {
     return `${durationMs} ms`;
   }
   return `${(durationMs / 1000).toFixed(1)} s`;
-};
-
-const hasWarning = (item: WorkflowItem): boolean => {
-  if (item.status !== "completed") {
-    return false;
-  }
-  if (item.timedOut) {
-    return true;
-  }
-
-  if (item.commandId === "nic_link_status") {
-    const adapterCount = item.structured.adapterCount;
-    const linkUpCount = item.structured.linkUpCount;
-    if (typeof adapterCount === "number" && adapterCount === 0) {
-      return true;
-    }
-    if (typeof linkUpCount === "number" && linkUpCount === 0) {
-      return true;
-    }
-    return false;
-  }
-
-  const packetLoss = item.structured.packetLossPercent;
-  if (typeof packetLoss === "number" && packetLoss > 5) {
-    return true;
-  }
-
-  if (item.structured.hasDefaultRoute === false || item.structured.resolved === false) {
-    return true;
-  }
-
-  return item.diagnosis.some((line) => {
-    const englishWarning = /\b(failed|failure|timeout|timed\s*out|without|missing|unstable|unreachable)\b/i;
-    const chineseWarning = /(失败|超时|缺失|不稳定|不可达|异常|告警)/;
-    return englishWarning.test(line) || chineseWarning.test(line);
-  });
 };
 
 const toStatusClass = (status: LayerStatus | WorkflowStatus): string => {
@@ -310,6 +253,41 @@ const App = (): JSX.Element => {
     };
   }, []);
 
+  useEffect(() => {
+    const scrollContainers = Array.from(
+      document.querySelectorAll<HTMLElement>(".command-list, .workflow-list, .panel, .terminal")
+    );
+    const hideTimers = new Map<HTMLElement, number>();
+    const listeners: Array<{ element: HTMLElement; handler: () => void }> = [];
+
+    scrollContainers.forEach((element) => {
+      const handler = (): void => {
+        element.classList.add("is-scrolling");
+        const currentTimer = hideTimers.get(element);
+        if (currentTimer) {
+          window.clearTimeout(currentTimer);
+        }
+        const nextTimer = window.setTimeout(() => {
+          element.classList.remove("is-scrolling");
+          hideTimers.delete(element);
+        }, 720);
+        hideTimers.set(element, nextTimer);
+      };
+
+      element.addEventListener("scroll", handler, { passive: true });
+      listeners.push({ element, handler });
+    });
+
+    return () => {
+      listeners.forEach(({ element, handler }) => {
+        element.removeEventListener("scroll", handler);
+        element.classList.remove("is-scrolling");
+      });
+      hideTimers.forEach((timer) => window.clearTimeout(timer));
+      hideTimers.clear();
+    };
+  }, [activeTab]);
+
   const oneClickCommands = useMemo(
     () =>
       oneClickOrder
@@ -340,105 +318,7 @@ const App = (): JSX.Element => {
     );
   }, [showOnlyIssues, workflowItems]);
 
-  const summary = useMemo(() => {
-    const total = workflowItems.length;
-    const running = workflowItems.filter((item) => item.status === "running").length;
-    const completed = workflowItems.filter((item) => item.status === "completed").length;
-    const failed = workflowItems.filter((item) => item.status === "failed").length;
-    const warnings = workflowItems.filter((item) => hasWarning(item)).length;
-
-    const byId = new Map(workflowItems.map((item) => [item.commandId, item]));
-
-    const layers: LayerSummary[] = layerDefinitions.map((layer) => {
-      const related = layer.commandIds
-        .map((commandId) => byId.get(commandId))
-        .filter((item): item is WorkflowItem => Boolean(item));
-
-      if (related.length === 0) {
-        return { id: layer.id, label: layer.label, status: "pending", note: "未选择检测项" };
-      }
-
-      if (related.some((item) => item.status === "pending" || item.status === "running")) {
-        return { id: layer.id, label: layer.label, status: "running", note: "检测进行中" };
-      }
-
-      if (related.some((item) => item.status === "failed" || item.timedOut)) {
-        return { id: layer.id, label: layer.label, status: "failed", note: "该层存在失败项" };
-      }
-
-      if (related.some((item) => hasWarning(item))) {
-        return { id: layer.id, label: layer.label, status: "warning", note: "该层存在告警信号" };
-      }
-
-      return { id: layer.id, label: layer.label, status: "passed", note: "健康" };
-    });
-
-    const causes: RootCause[] = [];
-
-    const nic = byId.get("nic_link_status");
-    if (nic && typeof nic.structured.linkUpCount === "number" && nic.structured.linkUpCount === 0) {
-      causes.push({
-        title: "没有可用网卡",
-        evidence: "网卡链路状态显示 UP 网卡数量为 0。",
-        severity: "high"
-      });
-    }
-
-    const route = byId.get("default_route_check");
-    if (route?.structured.hasDefaultRoute === false) {
-      causes.push({
-        title: "默认路由缺失",
-        evidence: "路由表中未发现默认路由。",
-        severity: "high"
-      });
-    }
-
-    const dns = byId.get("global_dns_probe");
-    if (dns?.structured.resolved === false) {
-      causes.push({
-        title: "DNS 解析失败",
-        evidence: "全局 DNS 探测无法解析 example.com。",
-        severity: "high"
-      });
-    }
-
-    const internet = byId.get("global_internet_icmp");
-    const packetLoss = internet?.structured.packetLossPercent;
-    if (typeof packetLoss === "number" && packetLoss >= 100) {
-      causes.push({
-        title: "无外网连通性",
-        evidence: "对 1.1.1.1 的全局 ICMP 探测丢包率为 100%。",
-        severity: "high"
-      });
-    } else if (typeof packetLoss === "number" && packetLoss > 5) {
-      causes.push({
-        title: "外网链路不稳定",
-        evidence: `全局 ICMP 探测丢包率为 ${packetLoss}%。`,
-        severity: "medium"
-      });
-    }
-
-    if (causes.length === 0 && total > 0 && running === 0) {
-      causes.push({
-        title: "已完成检测",
-        evidence: "已完成检测，但暂未检测到问题。",
-        severity: "low"
-      });
-    }
-
-    const severityWeight: Record<RootCause["severity"], number> = { high: 3, medium: 2, low: 1 };
-    causes.sort((a, b) => severityWeight[b.severity] - severityWeight[a.severity]);
-
-    return {
-      total,
-      running,
-      completed,
-      failed,
-      warnings,
-      layers,
-      causes: causes.slice(0, 3)
-    };
-  }, [workflowItems]);
+  const summary = useMemo(() => buildSummary(workflowItems, layerDefinitions), [workflowItems]);
 
   const resolveTarget = (command: CommandDefinition): string | null => {
     const defaultTarget = command.defaultTarget.trim();
@@ -553,7 +433,7 @@ const App = (): JSX.Element => {
           cleanup();
 
           if (!options?.suppressStatusUpdates) {
-            setStatusMessage(completed.status === "completed" ? "检测完成。" : "检测完成（存在告警）。");
+            setStatusMessage(completed.status === "completed" ? "检测完成。" : "检测失败。");
           }
 
           resolve(completed);
@@ -598,6 +478,10 @@ const App = (): JSX.Element => {
   };
 
   const handleRun = async (command: CommandDefinition): Promise<void> => {
+    if (isBatchRunning || isRunningSingle) {
+      return;
+    }
+
     const startedAt = new Date().toISOString();
     setWorkflowItems([
       {
@@ -608,6 +492,7 @@ const App = (): JSX.Element => {
         startedAt,
         timedOut: false,
         diagnosis: [],
+        evidence: [],
         structured: {}
       }
     ]);
@@ -626,6 +511,7 @@ const App = (): JSX.Element => {
           durationMs: durationBetween(result.startedAt, result.endedAt),
           timedOut,
           diagnosis: result.diagnosis,
+          evidence: result.evidence ?? [],
           structured: result.structured,
           errorMessage: result.status === "failed" ? result.diagnosis[0] : undefined
         }
@@ -644,6 +530,7 @@ const App = (): JSX.Element => {
           durationMs: durationBetween(startedAt, endedAt),
           timedOut: false,
           diagnosis: [message],
+          evidence: [message],
           structured: {},
           errorMessage: message
         }
@@ -654,7 +541,7 @@ const App = (): JSX.Element => {
   };
 
   const handleRunOneClick = async (): Promise<void> => {
-    if (isBatchRunning) {
+    if (isBatchRunning || isRunningSingle) {
       return;
     }
 
@@ -687,6 +574,7 @@ const App = (): JSX.Element => {
         status: "pending",
         timedOut: false,
         diagnosis: [],
+        evidence: [],
         structured: {}
       }))
     );
@@ -732,6 +620,7 @@ const App = (): JSX.Element => {
             durationMs: durationBetween(result.startedAt, result.endedAt),
             timedOut,
             diagnosis: result.diagnosis,
+            evidence: result.evidence ?? [],
             structured: result.structured,
             errorMessage: result.status === "failed" ? result.diagnosis[0] : undefined
           }));
@@ -751,6 +640,8 @@ const App = (): JSX.Element => {
             status: "failed",
             endedAt,
             durationMs: durationBetween(item.startedAt, endedAt),
+            diagnosis: [message],
+            evidence: [message],
             errorMessage: message
           }));
 
@@ -835,7 +726,7 @@ const App = (): JSX.Element => {
     window.addEventListener("pointerup", handlePointerUp);
   };
 
-  const isRunningSingle = activeJob?.status === "running";
+  const isRunningSingle = !isBatchRunning && activeJob?.status === "running";
   const statusClass = isBatchRunning ? "running" : activeJob?.status ?? "idle";
   const statusLabel =
     isBatchRunning
@@ -844,9 +735,9 @@ const App = (): JSX.Element => {
         ? "运行中"
         : activeJob?.status === "completed"
           ? "已完成"
-        : activeJob?.status === "failed"
-          ? "失败"
-          : "空闲";
+          : activeJob?.status === "failed"
+            ? "失败"
+            : "空闲";
   const appShellStyle = { "--sidebar-width": `${sidebarWidth}px` } as CSSProperties;
 
   return (
@@ -875,7 +766,7 @@ const App = (): JSX.Element => {
                 type="button"
                 className="workflow-run"
                 onClick={() => void handleRunOneClick()}
-                disabled={isBatchRunning || oneClickCommands.length === 0}
+                disabled={isBatchRunning || isRunningSingle || oneClickCommands.length === 0}
               >
                 {isBatchRunning ? "运行中..." : "运行"}
               </button>
@@ -972,7 +863,7 @@ const App = (): JSX.Element => {
                             event.stopPropagation();
                             void handleRun(command);
                           }}
-                          disabled={isBatchRunning}
+                          disabled={isBatchRunning || isRunningSingle}
                         >
                           {running ? "运行中" : "运行"}
                         </button>

@@ -105,7 +105,8 @@ class JobManager {
       exitCode: null,
       rawOutput: "",
       structured: {},
-      diagnosis: []
+      diagnosis: [],
+      evidence: []
     };
 
     const internalJob: InternalJob = {
@@ -250,10 +251,12 @@ class JobManager {
         timedOut: true,
         timeoutSeconds: input.timeoutSeconds
       };
+      const timeoutEvidence = `命令执行超过 ${input.timeoutSeconds} 秒，已被系统终止。`;
       job.snapshot.diagnosis = [
         ...parsed.diagnosis,
-        `命令执行超过 ${input.timeoutSeconds} 秒，已被系统终止。`
+        timeoutEvidence
       ];
+      job.snapshot.evidence = [...(parsed.evidence ?? []), timeoutEvidence];
 
       this.emit(job, {
         type: "error",
@@ -297,6 +300,7 @@ class JobManager {
     child.on("error", (error) => {
       flushDecoders();
       job.snapshot.diagnosis = ["命令执行失败，请检查本机是否已安装所需网络工具。"];
+      job.snapshot.evidence = ["进程启动失败，命令未正常执行。"];
       this.emit(job, {
         type: "error",
         payload: { message: error.message }
@@ -317,6 +321,7 @@ class JobManager {
         timedOut
       };
       job.snapshot.diagnosis = parsed.diagnosis;
+      job.snapshot.evidence = parsed.evidence ?? [];
 
       finalize(exitCode === 0 ? "completed" : "failed", exitCode);
     });
