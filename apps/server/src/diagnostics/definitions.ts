@@ -108,6 +108,54 @@ const commandDefinitions: CommandRuntimeDefinition[] = [
     }
   },
   {
+    id: "gateway_reachability",
+    title: "默认网关可达性",
+    description: "对默认网关执行 ICMP 探测，验证本地二层连通。",
+    category: "连通性",
+    targetHint: "无需填写目标。",
+    defaultTarget: "localhost",
+    supportsCount: false,
+    requiresTarget: false,
+    build: () => {
+      if (isWindows) {
+        return {
+          command: "powershell",
+          args: [
+            "-NoProfile",
+            "-Command",
+            "$gw = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).NextHop; if (!$gw) { Write-Output 'GATEWAY:NOT_FOUND'; exit 1 }; Write-Output \"GATEWAY:$gw\"; ping -n 2 $gw"
+          ]
+        };
+      }
+
+      return unsupportedPlatform("默认网关可达性");
+    }
+  },
+  {
+    id: "arp_neighbor_check",
+    title: "ARP 邻居表检测",
+    description: "检查默认网关是否出现在邻居表中，并判断其状态。",
+    category: "连通性",
+    targetHint: "无需填写目标。",
+    defaultTarget: "localhost",
+    supportsCount: false,
+    requiresTarget: false,
+    build: () => {
+      if (isWindows) {
+        return {
+          command: "powershell",
+          args: [
+            "-NoProfile",
+            "-Command",
+            "$gw = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).NextHop; if ($gw) { Write-Output \"GATEWAY:$gw\" } else { Write-Output 'GATEWAY:NOT_FOUND' }; Get-NetNeighbor -AddressFamily IPv4 | Select-Object IPAddress,LinkLayerAddress,State,InterfaceAlias | Format-Table -AutoSize"
+          ]
+        };
+      }
+
+      return unsupportedPlatform("ARP 邻居表检测");
+    }
+  },
+  {
     id: "global_internet_icmp",
     title: "全局网络 ICMP",
     description: "通过公共 IP 检查外网连通性。",
@@ -251,6 +299,30 @@ const commandDefinitions: CommandRuntimeDefinition[] = [
     }
   },
   {
+    id: "dns_server_probe",
+    title: "DNS 服务器可用性",
+    description: "逐个验证本机 DNS 服务器是否能解析公共域名。",
+    category: "DNS",
+    targetHint: "无需填写目标。",
+    defaultTarget: "localhost",
+    supportsCount: false,
+    requiresTarget: false,
+    build: () => {
+      if (isWindows) {
+        return {
+          command: "powershell",
+          args: [
+            "-NoProfile",
+            "-Command",
+            "$servers = (Get-DnsClientServerAddress -AddressFamily IPv4 | Select-Object -ExpandProperty ServerAddresses) | Where-Object { $_ }; $unique = $servers | Select-Object -Unique; if (-not $unique) { Write-Output 'DNS_SERVER:NONE'; exit 1 }; foreach ($s in $unique) { try { Resolve-DnsName -Name 'example.com' -Server $s -ErrorAction Stop | Out-Null; Write-Output \"DNS_SERVER:$s OK\" } catch { Write-Output \"DNS_SERVER:$s FAIL\" } }"
+          ]
+        };
+      }
+
+      return unsupportedPlatform("DNS 服务器可用性");
+    }
+  },
+  {
     id: "hosts_file_check",
     title: "Hosts 文件检测",
     description: "检查 Hosts 映射并识别潜在风险覆盖项。",
@@ -313,6 +385,30 @@ const commandDefinitions: CommandRuntimeDefinition[] = [
       }
 
       return unsupportedPlatform("IE 代理检测");
+    }
+  },
+  {
+    id: "proxy_conflict_check",
+    title: "代理冲突检测",
+    description: "检查系统代理与环境变量代理是否存在冲突。",
+    category: "代理",
+    targetHint: "无需填写目标。",
+    defaultTarget: "localhost",
+    supportsCount: false,
+    requiresTarget: false,
+    build: () => {
+      if (isWindows) {
+        return {
+          command: "powershell",
+          args: [
+            "-NoProfile",
+            "-Command",
+            "$setting = Get-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'; $proxyEnabled = $setting.ProxyEnable -eq 1; $proxyServer = $setting.ProxyServer; $autoConfigUrl = $setting.AutoConfigURL; $envProxy = $env:HTTP_PROXY; if (!$envProxy) { $envProxy = $env:HTTPS_PROXY }; $envNoProxy = $env:NO_PROXY; Write-Output \"SYS_PROXY_ENABLED:$proxyEnabled\"; Write-Output \"SYS_PROXY_SERVER:$proxyServer\"; Write-Output \"SYS_PAC:$autoConfigUrl\"; Write-Output \"ENV_PROXY:$envProxy\"; Write-Output \"ENV_NO_PROXY:$envNoProxy\""
+          ]
+        };
+      }
+
+      return unsupportedPlatform("代理冲突检测");
     }
   },
   {

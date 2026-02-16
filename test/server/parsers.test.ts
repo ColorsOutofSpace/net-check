@@ -159,6 +159,51 @@ test("parseCommandOutput: default_route_check 可识别默认路由", () => {
   ensureEvidence(result.evidence);
 });
 
+test("parseCommandOutput: gateway_reachability 可解析网关与连通性", () => {
+  const output = [
+    "GATEWAY:192.168.1.1",
+    "Ping statistics for 192.168.1.1:",
+    "    Packets: Sent = 2, Received = 2, Lost = 0 (0% loss),",
+    ""
+  ].join("\n");
+
+  const result = parseCommandOutput("gateway_reachability", output, 0) as unknown as {
+    structured: Record<string, unknown>;
+    diagnosis: string[];
+    evidence: unknown;
+  };
+
+  assert.equal(result.structured.gatewayFound, true);
+  assert.equal(result.structured.gateway, "192.168.1.1");
+  assert.equal(result.structured.packetLossPercent, 0);
+  assert.ok(result.diagnosis.join("；").includes("默认网关可达"));
+  ensureEvidence(result.evidence);
+});
+
+test("parseCommandOutput: arp_neighbor_check 可识别网关邻居状态", () => {
+  const output = [
+    "GATEWAY:192.168.1.1",
+    "IPAddress      LinkLayerAddress      State       InterfaceAlias",
+    "---------      ----------------      -----       --------------",
+    "192.168.1.1    00-11-22-33-44-55      Reachable   Ethernet",
+    "192.168.1.100  66-77-88-99-AA-BB      Stale       Ethernet",
+    ""
+  ].join("\n");
+
+  const result = parseCommandOutput("arp_neighbor_check", output, 0) as unknown as {
+    structured: Record<string, unknown>;
+    diagnosis: string[];
+    evidence: unknown;
+  };
+
+  assert.equal(result.structured.gatewayFound, true);
+  assert.equal(result.structured.gateway, "192.168.1.1");
+  assert.equal(result.structured.gatewayState, "Reachable");
+  assert.ok((result.structured.neighborCount as number) >= 2);
+  assert.ok(result.diagnosis.join("；").includes("ARP 已解析"));
+  ensureEvidence(result.evidence);
+});
+
 test("parseCommandOutput: trace_route 可统计 hop/timeout", () => {
   const output = [
     "Tracing route to 1.1.1.1 over a maximum of 30 hops",
@@ -281,6 +326,26 @@ test("parseCommandOutput: dns_server_config 可识别回环 DNS", () => {
   ensureEvidence(result.evidence);
 });
 
+test("parseCommandOutput: dns_server_probe 统计成功与失败", () => {
+  const output = [
+    "DNS_SERVER:8.8.8.8 OK",
+    "DNS_SERVER:1.1.1.1 FAIL",
+    ""
+  ].join("\n");
+
+  const result = parseCommandOutput("dns_server_probe", output, 0) as unknown as {
+    structured: Record<string, unknown>;
+    diagnosis: string[];
+    evidence: unknown;
+  };
+
+  assert.equal(result.structured.dnsServerCount, 2);
+  assert.equal(result.structured.dnsServerSuccessCount, 1);
+  assert.equal(result.structured.dnsServerFailCount, 1);
+  assert.ok(result.diagnosis.join("；").includes("部分 DNS 服务器解析失败"));
+  ensureEvidence(result.evidence);
+});
+
 test("parseCommandOutput: hosts_file_check 可统计映射行/重复/localhost", () => {
   const output = [
     "# comment",
@@ -341,6 +406,30 @@ test("parseCommandOutput: ie_proxy_check 可解析 ProxyEnable/ProxyServer", () 
   assert.equal(result.structured.proxyEnabled, true);
   assert.equal(result.structured.hasProxyServer, true);
   assert.equal(result.structured.hasPacUrl, false);
+  ensureEvidence(result.evidence);
+});
+
+test("parseCommandOutput: proxy_conflict_check 识别冲突与 NO_PROXY", () => {
+  const output = [
+    "SYS_PROXY_ENABLED:True",
+    "SYS_PROXY_SERVER:http://proxy.local:8080",
+    "SYS_PAC:",
+    "ENV_PROXY:http://proxy.local:8080",
+    "ENV_NO_PROXY:",
+    ""
+  ].join("\n");
+
+  const result = parseCommandOutput("proxy_conflict_check", output, 0) as unknown as {
+    structured: Record<string, unknown>;
+    diagnosis: string[];
+    evidence: unknown;
+  };
+
+  assert.equal(result.structured.hasSystemProxy, true);
+  assert.equal(result.structured.hasEnvProxy, true);
+  assert.equal(result.structured.proxyConflict, true);
+  assert.equal(result.structured.hasNoProxy, false);
+  assert.ok(result.diagnosis.join("；").includes("代理"));
   ensureEvidence(result.evidence);
 });
 

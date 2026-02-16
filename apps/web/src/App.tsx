@@ -49,12 +49,16 @@ const readStoredSidebarWidth = (): number => {
 const globalPresetIds = [
   "nic_link_status",
   "nic_ip_config",
-  "default_route_check",
   "dhcp_status",
+  "default_route_check",
+  "gateway_reachability",
+  "arp_neighbor_check",
   "dns_server_config",
+  "dns_server_probe",
   "hosts_file_check",
   "lsp_catalog_check",
   "ie_proxy_check",
+  "proxy_conflict_check",
   "network_env_vars",
   "global_internet_icmp",
   "global_dns_probe"
@@ -62,9 +66,21 @@ const globalPresetIds = [
 
 const layerDefinitions: LayerDefinition[] = [
   { id: "adapter", label: "适配器", commandIds: ["nic_link_status", "nic_ip_config", "dhcp_status"] },
-  { id: "route", label: "路由", commandIds: ["default_route_check", "trace_route"] },
-  { id: "dns", label: "DNS", commandIds: ["dns_server_config", "hosts_file_check", "dns_lookup", "global_dns_probe"] },
-  { id: "proxy", label: "代理", commandIds: ["ie_proxy_check", "network_env_vars", "lsp_catalog_check"] },
+  {
+    id: "route",
+    label: "路由",
+    commandIds: ["default_route_check", "gateway_reachability", "arp_neighbor_check", "trace_route"]
+  },
+  {
+    id: "dns",
+    label: "DNS",
+    commandIds: ["dns_server_config", "dns_server_probe", "hosts_file_check", "dns_lookup", "global_dns_probe"]
+  },
+  {
+    id: "proxy",
+    label: "代理",
+    commandIds: ["ie_proxy_check", "proxy_conflict_check", "network_env_vars", "lsp_catalog_check"]
+  },
   { id: "internet", label: "互联网", commandIds: ["global_internet_icmp", "http_head", "ping_target"] }
 ];
 

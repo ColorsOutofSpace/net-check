@@ -151,6 +151,101 @@ const parseDefaultRouteCheck = (output: string): ParseResult => {
   return { structured, diagnosis };
 };
 
+const parseGatewayReachability = (output: string): ParseResult => {
+  const base = parsePing(output);
+  const structured: Record<string, string | number | boolean> = { ...base.structured };
+  const diagnosis: string[] = [];
+
+  const gatewayMatch = output.match(/GATEWAY:([^\r\n]+)/i);
+  const gatewayRaw = gatewayMatch?.[1]?.trim();
+  const gatewayFound = Boolean(gatewayRaw && gatewayRaw !== "NOT_FOUND");
+
+  structured.gatewayFound = gatewayFound;
+  if (gatewayFound && gatewayRaw) {
+    structured.gateway = gatewayRaw;
+  }
+
+  if (!gatewayFound) {
+    diagnosis.push("未检测到默认网关。");
+    return { structured, diagnosis };
+  }
+
+  const loss = structured.packetLossPercent;
+  if (typeof loss === "number") {
+    if (loss >= 100) {
+      diagnosis.push("默认网关不可达，请检查本机到交换机/网关的链路。");
+    } else if (loss > 0) {
+      diagnosis.push("默认网关存在丢包，二层链路或网关可能不稳定。");
+    } else {
+      diagnosis.push("默认网关可达。");
+    }
+  } else {
+    diagnosis.push("无法解析默认网关的丢包率。");
+  }
+
+  if (typeof structured.avgLatencyMs === "number") {
+    diagnosis.push(`默认网关平均时延为 ${structured.avgLatencyMs} ms。`);
+  }
+
+  return { structured, diagnosis };
+};
+
+const parseArpNeighborCheck = (output: string): ParseResult => {
+  const structured: Record<string, string | number | boolean> = {};
+  const diagnosis: string[] = [];
+
+  const gatewayMatch = output.match(/GATEWAY:([^\r\n]+)/i);
+  const gatewayRaw = gatewayMatch?.[1]?.trim();
+  const gatewayFound = Boolean(gatewayRaw && gatewayRaw !== "NOT_FOUND");
+  structured.gatewayFound = gatewayFound;
+  if (gatewayFound && gatewayRaw) {
+    structured.gateway = gatewayRaw;
+  }
+
+  const lines = output.split(/\r?\n/);
+  const neighborLines = lines.filter(
+    (line) => /\b(?:\d{1,3}\.){3}\d{1,3}\b/.test(line) && !/^GATEWAY:/i.test(line)
+  );
+  const reachableCount = neighborLines.filter((line) => /\bReachable\b/i.test(line)).length;
+  const staleCount = neighborLines.filter((line) => /\bStale\b/i.test(line)).length;
+  const incompleteCount = neighborLines.filter((line) => /\bIncomplete\b/i.test(line)).length;
+
+  structured.neighborCount = neighborLines.length;
+  structured.reachableCount = reachableCount;
+  structured.staleCount = staleCount;
+  structured.incompleteCount = incompleteCount;
+
+  let gatewayState: string | undefined;
+  if (gatewayFound && gatewayRaw) {
+    const gatewayLine = neighborLines.find((line) => line.includes(gatewayRaw));
+    if (gatewayLine) {
+      gatewayState =
+        gatewayLine.match(/\b(Reachable|Stale|Delay|Probe|Incomplete|Unreachable|Permanent)\b/i)?.[1] ?? undefined;
+      if (gatewayState) {
+        structured.gatewayState = gatewayState;
+      }
+    }
+  }
+
+  if (!gatewayFound) {
+    diagnosis.push("未检测到默认网关。");
+  } else if (!gatewayState) {
+    diagnosis.push("未能在邻居表中找到默认网关记录。");
+  } else if (/Reachable|Stale|Permanent/i.test(gatewayState)) {
+    diagnosis.push("默认网关 ARP 已解析。");
+  } else if (/Incomplete|Unreachable/i.test(gatewayState)) {
+    diagnosis.push("默认网关 ARP 未解析，请检查二层连通性。");
+  } else {
+    diagnosis.push("已获取默认网关邻居状态，请结合输出确认。");
+  }
+
+  if (neighborLines.length === 0) {
+    diagnosis.push("邻居表未解析到任何 IPv4 条目。");
+  }
+
+  return { structured, diagnosis };
+};
+
 const parseHttp = (output: string): ParseResult => {
   const structured: Record<string, string | number | boolean> = {};
   const diagnosis: string[] = [];
@@ -327,6 +422,42 @@ const parseDnsServerConfig = (output: string): ParseResult => {
   return { structured, diagnosis };
 };
 
+const parseDnsServerProbe = (output: string): ParseResult => {
+  const structured: Record<string, string | number | boolean> = {};
+  const diagnosis: string[] = [];
+
+  const lines = output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+  if (lines.some((line) => /^DNS_SERVER:NONE$/i.test(line))) {
+    structured.dnsServerCount = 0;
+    structured.dnsServerSuccessCount = 0;
+    structured.dnsServerFailCount = 0;
+    diagnosis.push("未检测到 DNS 服务器配置。");
+    return { structured, diagnosis };
+  }
+
+  const results = lines
+    .map((line) => line.match(/^DNS_SERVER:([^\s]+)\s+(OK|FAIL)$/i))
+    .filter((match): match is RegExpMatchArray => Boolean(match));
+
+  const total = results.length;
+  const successCount = results.filter((match) => match[2].toUpperCase() === "OK").length;
+  const failCount = total - successCount;
+
+  structured.dnsServerCount = total;
+  structured.dnsServerSuccessCount = successCount;
+  structured.dnsServerFailCount = failCount;
+
+  if (total === 0) {
+    diagnosis.push("未解析到 DNS 服务器探测结果。");
+  } else if (failCount > 0) {
+    diagnosis.push("部分 DNS 服务器解析失败，请检查上游 DNS 或网络连通性。");
+  } else {
+    diagnosis.push("DNS 服务器解析可用。");
+  }
+
+  return { structured, diagnosis };
+};
+
 const parseHostsFileCheck = (output: string): ParseResult => {
   const structured: Record<string, string | number | boolean> = {};
   const diagnosis: string[] = [];
@@ -432,6 +563,63 @@ const parseIeProxyCheck = (output: string): ParseResult => {
   return { structured, diagnosis };
 };
 
+const parseProxyConflictCheck = (output: string): ParseResult => {
+  const structured: Record<string, string | number | boolean> = {};
+  const diagnosis: string[] = [];
+
+  const sysEnabledMatch = output.match(/SYS_PROXY_ENABLED:([^\r\n]+)/i);
+  const sysServerMatch = output.match(/SYS_PROXY_SERVER:([^\r\n]*)/i);
+  const sysPacMatch = output.match(/SYS_PAC:([^\r\n]*)/i);
+  const envProxyMatch = output.match(/ENV_PROXY:([^\r\n]*)/i);
+  const envNoProxyMatch = output.match(/ENV_NO_PROXY:([^\r\n]*)/i);
+
+  const sysEnabled = sysEnabledMatch?.[1]?.trim().toLowerCase() === "true";
+  const sysServerRaw = (sysServerMatch?.[1] ?? "").trim();
+  const sysPacRaw = (sysPacMatch?.[1] ?? "").trim();
+  const envProxyRaw = (envProxyMatch?.[1] ?? "").trim();
+  const envNoProxyRaw = (envNoProxyMatch?.[1] ?? "").trim();
+
+  const systemProxyServer = sysServerRaw ? maskProxyValue(sysServerRaw) : "";
+  const envProxy = envProxyRaw ? maskProxyValue(envProxyRaw) : "";
+
+  const hasSystemProxy = sysEnabled && systemProxyServer.length > 0;
+  const hasEnvProxy = envProxy.length > 0;
+  const hasPacUrl = sysPacRaw.length > 0;
+  const hasNoProxy = envNoProxyRaw.length > 0;
+  const proxyConflict = hasSystemProxy && hasEnvProxy;
+
+  structured.systemProxyEnabled = sysEnabled;
+  structured.systemProxyServer = systemProxyServer;
+  structured.systemPacUrl = sysPacRaw;
+  structured.envProxy = envProxy;
+  structured.envNoProxy = envNoProxyRaw;
+  structured.hasSystemProxy = hasSystemProxy;
+  structured.hasEnvProxy = hasEnvProxy;
+  structured.hasPacUrl = hasPacUrl;
+  structured.hasNoProxy = hasNoProxy;
+  structured.proxyConflict = proxyConflict;
+
+  if (proxyConflict) {
+    diagnosis.push("系统代理与环境变量代理同时设置，可能存在冲突。");
+  } else if (hasSystemProxy) {
+    diagnosis.push("系统代理已配置。");
+  } else if (hasEnvProxy) {
+    diagnosis.push("检测到环境变量代理。");
+  } else {
+    diagnosis.push("未检测到代理配置。");
+  }
+
+  if (hasEnvProxy && !hasNoProxy) {
+    diagnosis.push("环境变量代理缺少 NO_PROXY，本地/内网请求可能受影响。");
+  }
+
+  if (hasPacUrl) {
+    diagnosis.push("检测到 PAC 配置，请确认 PAC 可达性。");
+  }
+
+  return { structured, diagnosis };
+};
+
 const maskProxyValue = (value: string): string =>
   value.replace(/\/\/([^:@/\s]+):([^@/\s]+)@/g, "//$1:***@");
 
@@ -516,6 +704,10 @@ export const parseCommandOutput = (commandId: string, output: string, exitCode: 
     parsed = parseTraceRoute(output);
   } else if (commandId === "default_route_check") {
     parsed = parseDefaultRouteCheck(output);
+  } else if (commandId === "gateway_reachability") {
+    parsed = parseGatewayReachability(output);
+  } else if (commandId === "arp_neighbor_check") {
+    parsed = parseArpNeighborCheck(output);
   } else if (commandId === "global_internet_icmp") {
     parsed = parseGlobalInternetIcmp(output);
   } else if (commandId === "global_dns_probe") {
@@ -530,12 +722,16 @@ export const parseCommandOutput = (commandId: string, output: string, exitCode: 
     parsed = parseDhcpStatus(output);
   } else if (commandId === "dns_server_config") {
     parsed = parseDnsServerConfig(output);
+  } else if (commandId === "dns_server_probe") {
+    parsed = parseDnsServerProbe(output);
   } else if (commandId === "hosts_file_check") {
     parsed = parseHostsFileCheck(output);
   } else if (commandId === "lsp_catalog_check") {
     parsed = parseLspCatalogCheck(output);
   } else if (commandId === "ie_proxy_check") {
     parsed = parseIeProxyCheck(output);
+  } else if (commandId === "proxy_conflict_check") {
+    parsed = parseProxyConflictCheck(output);
   } else if (commandId === "network_env_vars") {
     parsed = parseNetworkEnvVars(output);
   } else {
