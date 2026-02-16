@@ -88,5 +88,6 @@ net-check/
 - 架构文档：`docs/architecture.md`（总体架构、核心模块、数据流、并发模型、告警/根因逻辑、安全边界、扩展建议）
 - 开发规范：`docs/development.md`（开发原则、分层职责、代码风格、检测项开发流程、并发规范、测试与验证、提交与评审、安全与隐私）
 - 贡献指南：`docs/contribution.md`（Fork/分支/提交流程、开发验证、Commit/PR 规范、检查清单、Issue 报告建议、安全问题处理）
+- 许可证：`LICENSE`（MIT）
 
 如果你要在 GitHub 上参与开发，请先阅读贡献指南。
