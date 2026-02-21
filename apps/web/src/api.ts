@@ -98,9 +98,13 @@ const parseApiErrorMessage = async (response: Response, fallback: string): Promi
   }
 
   try {
-    const parsed = JSON.parse(text) as { message?: unknown };
+    const parsed = JSON.parse(text) as { message?: unknown; reason?: unknown };
     if (typeof parsed.message === "string" && parsed.message.trim()) {
-      return parsed.message.trim();
+      const message = parsed.message.trim();
+      if (typeof parsed.reason === "string" && parsed.reason.trim()) {
+        return `${message}（${parsed.reason.trim()}）`;
+      }
+      return message;
     }
   } catch {
     // ignore parse failure and fallback

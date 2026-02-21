@@ -122,7 +122,7 @@ test("parseCommandOutput: dns_lookup 解析失败", () => {
 
 test("parseCommandOutput: global_dns_probe 会补充 probeDomain", () => {
   const output = [
-    "Name:    example.com",
+    "Name:    baidu.com",
     "Address: 93.184.216.34",
     ""
   ].join("\n");
@@ -133,9 +133,9 @@ test("parseCommandOutput: global_dns_probe 会补充 probeDomain", () => {
     evidence: unknown;
   };
 
-  assert.equal(result.structured.probeDomain, "example.com");
+  assert.equal(result.structured.probeDomain, "baidu.com");
   assert.equal(result.structured.resolved, true);
-  assert.ok(result.diagnosis.join("；").includes("全局 DNS 探测可解析 example.com"));
+  assert.ok(result.diagnosis.join("；").includes("全局 DNS 探测可解析 baidu.com"));
   ensureEvidence(result.evidence);
 });
 

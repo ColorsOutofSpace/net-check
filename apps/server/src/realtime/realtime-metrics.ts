@@ -134,6 +134,24 @@ const parseLatencyMs = (output: string): number | null => {
   return latency;
 };
 
+const decodeCommandOutput = (buffer: Buffer): string => {
+  if (buffer.length === 0) {
+    return "";
+  }
+
+  const utf8 = buffer.toString("utf8");
+
+  // Some PowerShell hosts write UTF-16LE to pipes; handle that explicitly.
+  if (buffer.includes(0)) {
+    const utf16 = buffer.toString("utf16le").replace(/\u0000/g, "");
+    if (utf16.trim().length > 0) {
+      return utf16;
+    }
+  }
+
+  return utf8;
+};
+
 const estimateSignalDbm = (signalPercent: number | null): number | null => {
   if (signalPercent === null || !Number.isFinite(signalPercent)) {
     return null;
@@ -162,8 +180,8 @@ const resolveSignalQuality = (signalDbm: number | null): SignalQuality => {
 const runCommand = (command: string, args: string[], timeoutMs: number): Promise<CommandResult> =>
   new Promise((resolve) => {
     const child = spawn(command, args, { windowsHide: true });
-    let stdout = "";
-    let stderr = "";
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
     let settled = false;
 
     const finish = (exitCode: number | null): void => {
@@ -172,6 +190,8 @@ const runCommand = (command: string, args: string[], timeoutMs: number): Promise
       }
 
       settled = true;
+      const stdout = decodeCommandOutput(Buffer.concat(stdoutChunks));
+      const stderr = decodeCommandOutput(Buffer.concat(stderrChunks));
       resolve({ stdout, stderr, exitCode });
     };
 
@@ -184,15 +204,15 @@ const runCommand = (command: string, args: string[], timeoutMs: number): Promise
     }, timeoutMs);
 
     child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+      stdoutChunks.push(chunk);
     });
 
     child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
+      stderrChunks.push(chunk);
     });
 
     child.on("error", (error) => {
-      stderr += error.message;
+      stderrChunks.push(Buffer.from(error.message, "utf8"));
       clearTimeout(timeoutHandle);
       finish(null);
     });
@@ -227,20 +247,15 @@ const collectWindowsAdapterSample = async (): Promise<AdapterSample> => {
     "$stats = Get-NetAdapterStatistics -Name $adapter.Name | Select-Object -First 1",
     "$wifi = netsh wlan show interfaces | Out-String",
     "$signalPercent = $null",
-    "if ($wifi -match 'Signal\\s*:\\s*(\\d+)%') { $signalPercent = [int]$matches[1] }",
-    "[PSCustomObject]@{",
-    "  connected = $true;",
-    "  interfaceName = \"$($adapter.Name)\";",
-    "  interfaceAlias = \"$($route.InterfaceAlias)\";",
-    "  linkSpeed = \"$($adapter.LinkSpeed)\";",
-    "  receivedBytes = [double]$stats.ReceivedBytes;",
-    "  sentBytes = [double]$stats.SentBytes;",
-    "  signalPercent = $signalPercent;",
-    "  note = '';",
-    "} | ConvertTo-Json -Compress"
+    "if ($wifi -match 'Signal\\s*:\\s*(\\d+)%' -or $wifi -match '信号\\s*:\\s*(\\d+)%') { $signalPercent = [int]$matches[1] }",
+    "$result = [PSCustomObject]@{ connected = $true; interfaceName = \"$($adapter.Name)\"; interfaceAlias = \"$($route.InterfaceAlias)\"; linkSpeed = \"$($adapter.LinkSpeed)\"; receivedBytes = [double]$stats.ReceivedBytes; sentBytes = [double]$stats.SentBytes; signalPercent = $signalPercent; note = '' }",
+    "$result | ConvertTo-Json -Compress"
   ].join("; ");
 
   const result = await runCommand("powershell", ["-NoProfile", "-Command", command], 2600);
+  const combinedOutput = `${result.stdout}\n${result.stderr}`.trim();
+  const denied = adminPermissionErrorPatterns.some((pattern) => pattern.test(combinedOutput));
+
   if (result.exitCode === null) {
     return {
       connected: false,
@@ -254,6 +269,23 @@ const collectWindowsAdapterSample = async (): Promise<AdapterSample> => {
     };
   }
 
+  if (result.exitCode !== 0) {
+    return {
+      connected: false,
+      interfaceName: "",
+      interfaceAlias: "",
+      linkSpeed: "",
+      receivedBytes: 0,
+      sentBytes: 0,
+      signalPercent: null,
+      note: denied
+        ? realtimeAdminPermissionMessage
+        : combinedOutput
+          ? `实时采样命令失败：${combinedOutput.split(/\r?\n/)[0]}`
+          : "实时采样命令失败。"
+    };
+  }
+
   const raw = result.stdout.trim();
   if (!raw) {
     return {
@@ -264,7 +296,7 @@ const collectWindowsAdapterSample = async (): Promise<AdapterSample> => {
       receivedBytes: 0,
       sentBytes: 0,
       signalPercent: null,
-      note: "未读取到网卡状态。"
+      note: denied ? realtimeAdminPermissionMessage : "未读取到网卡状态。"
     };
   }
 
@@ -343,7 +375,7 @@ const evaluateRealtimeAdminCapability = (): RealtimeAdminCapability => {
     [
       "-NoProfile",
       "-Command",
-      "$ErrorActionPreference='Stop'; Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Select-Object -First 1 | Out-Null"
+      "$ErrorActionPreference='Stop'; Get-NetAdapter -IncludeHidden | Select-Object -First 1 | Out-Null; Get-NetAdapterStatistics | Select-Object -First 1 | Out-Null"
     ],
     {
       windowsHide: true,
@@ -351,10 +383,10 @@ const evaluateRealtimeAdminCapability = (): RealtimeAdminCapability => {
     }
   );
 
-  if (probe.status === 0) {
+  if (probe.error) {
     return {
-      ready: true,
-      reason: "管理员权限检查通过。",
+      ready: false,
+      reason: probe.error.message || "管理员权限检查失败。",
       checkedAt
     };
   }
@@ -366,6 +398,14 @@ const evaluateRealtimeAdminCapability = (): RealtimeAdminCapability => {
     return {
       ready: false,
       reason: "系统拒绝访问网络配置查询（需要管理员权限）。",
+      checkedAt
+    };
+  }
+
+  if (probe.status === 0) {
+    return {
+      ready: true,
+      reason: "管理员权限检查通过。",
       checkedAt
     };
   }

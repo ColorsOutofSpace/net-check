@@ -294,15 +294,15 @@ const parseGlobalDnsProbe = (output: string): ParseResult => {
   const diagnosis = [...base.diagnosis];
 
   if (base.structured.resolved === true) {
-    diagnosis.push("全局 DNS 探测可解析 example.com。");
+    diagnosis.push("全局 DNS 探测可解析 baidu.com。");
   } else {
-    diagnosis.push("全局 DNS 探测无法解析 example.com。");
+    diagnosis.push("全局 DNS 探测无法解析 baidu.com。");
   }
 
   return {
     structured: {
       ...base.structured,
-      probeDomain: "example.com"
+      probeDomain: "baidu.com"
     },
     diagnosis
   };

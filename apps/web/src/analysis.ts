@@ -166,7 +166,7 @@ export const buildSummary = (workflowItems: WorkflowItem[], layerDefinitions: La
   if (dns?.structured.resolved === false) {
     causes.push({
       title: "DNS 解析失败",
-      evidence: firstEvidence(dns, "全局 DNS 探测无法解析 example.com。"),
+      evidence: firstEvidence(dns, "全局 DNS 探测无法解析 baidu.com。"),
       severity: "high"
     });
   }

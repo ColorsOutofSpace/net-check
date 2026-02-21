@@ -182,7 +182,7 @@ const commandDefinitions: CommandRuntimeDefinition[] = [
     requiresTarget: false,
     build: () => ({
       command: "nslookup",
-      args: ["example.com"]
+      args: ["baidu.com"]
     })
   },
   {
@@ -385,7 +385,7 @@ const commandDefinitions: CommandRuntimeDefinition[] = [
           args: [
             "-NoProfile",
             "-Command",
-            "$servers = (Get-DnsClientServerAddress -AddressFamily IPv4 | Select-Object -ExpandProperty ServerAddresses) | Where-Object { $_ }; $unique = $servers | Select-Object -Unique; if (-not $unique) { Write-Output 'DNS_SERVER:NONE'; exit 1 }; foreach ($s in $unique) { try { Resolve-DnsName -Name 'example.com' -Server $s -ErrorAction Stop | Out-Null; Write-Output \"DNS_SERVER:$s OK\" } catch { Write-Output \"DNS_SERVER:$s FAIL\" } }"
+            "$servers = (Get-DnsClientServerAddress -AddressFamily IPv4 | Select-Object -ExpandProperty ServerAddresses) | Where-Object { $_ }; $unique = $servers | Select-Object -Unique; if (-not $unique) { Write-Output 'DNS_SERVER:NONE'; exit 1 }; foreach ($s in $unique) { try { Resolve-DnsName -Name 'baidu.com' -Server $s -ErrorAction Stop | Out-Null; Write-Output \"DNS_SERVER:$s OK\" } catch { Write-Output \"DNS_SERVER:$s FAIL\" } }"
           ]
         };
       }
