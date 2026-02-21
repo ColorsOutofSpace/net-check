@@ -4,6 +4,7 @@
   CommandRuntimeDefinition,
   DiagnosticCommandDefinition
 } from "../types";
+import { globalDnsProbeDomain } from "./constants";
 
 const isWindows = process.platform === "win32";
 const isLinux = process.platform === "linux";
@@ -47,10 +48,19 @@ const commandDefinitions: CommandRuntimeDefinition[] = [
     defaultTarget: "openai.com",
     supportsCount: false,
     requiresTarget: true,
-    build: ({ target }: CommandInput) => ({
-      command: "nslookup",
-      args: [target]
-    })
+    build: ({ target }: CommandInput) => {
+      if (isWindows) {
+        return {
+          command: "powershell",
+          args: ["-NoProfile", "-Command", `Resolve-DnsName -Name '${target}' | Format-Table -AutoSize`]
+        };
+      }
+
+      return {
+        command: "nslookup",
+        args: [target]
+      };
+    }
   },
   {
     id: "trace_route",
@@ -180,10 +190,23 @@ const commandDefinitions: CommandRuntimeDefinition[] = [
     defaultTarget: "localhost",
     supportsCount: false,
     requiresTarget: false,
-    build: () => ({
-      command: "nslookup",
-      args: ["baidu.com"]
-    })
+    build: () => {
+      if (isWindows) {
+        return {
+          command: "powershell",
+          args: [
+            "-NoProfile",
+            "-Command",
+            `Resolve-DnsName -Name '${globalDnsProbeDomain}' | Format-Table -AutoSize`
+          ]
+        };
+      }
+
+      return {
+        command: "nslookup",
+        args: [globalDnsProbeDomain]
+      };
+    }
   },
   {
     id: "nic_link_status",
@@ -385,7 +408,7 @@ const commandDefinitions: CommandRuntimeDefinition[] = [
           args: [
             "-NoProfile",
             "-Command",
-            "$servers = (Get-DnsClientServerAddress -AddressFamily IPv4 | Select-Object -ExpandProperty ServerAddresses) | Where-Object { $_ }; $unique = $servers | Select-Object -Unique; if (-not $unique) { Write-Output 'DNS_SERVER:NONE'; exit 1 }; foreach ($s in $unique) { try { Resolve-DnsName -Name 'baidu.com' -Server $s -ErrorAction Stop | Out-Null; Write-Output \"DNS_SERVER:$s OK\" } catch { Write-Output \"DNS_SERVER:$s FAIL\" } }"
+            `$servers = (Get-DnsClientServerAddress -AddressFamily IPv4 | Select-Object -ExpandProperty ServerAddresses) | Where-Object { $_ }; $unique = $servers | Select-Object -Unique; if (-not $unique) { Write-Output 'DNS_SERVER:NONE'; exit 1 }; foreach ($s in $unique) { try { Resolve-DnsName -Name '${globalDnsProbeDomain}' -Server $s -ErrorAction Stop | Out-Null; Write-Output "DNS_SERVER:$s OK" } catch { Write-Output "DNS_SERVER:$s FAIL" } }`
           ]
         };
       }

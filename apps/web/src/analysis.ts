@@ -164,9 +164,13 @@ export const buildSummary = (workflowItems: WorkflowItem[], layerDefinitions: La
 
   const dns = byId.get("global_dns_probe");
   if (dns?.structured.resolved === false) {
+    const dnsProbeDomain =
+      typeof dns.structured.probeDomain === "string" && dns.structured.probeDomain.trim().length > 0
+        ? dns.structured.probeDomain
+        : "探测域名";
     causes.push({
       title: "DNS 解析失败",
-      evidence: firstEvidence(dns, "全局 DNS 探测无法解析 baidu.com。"),
+      evidence: firstEvidence(dns, `全局 DNS 探测无法解析 ${dnsProbeDomain}。`),
       severity: "high"
     });
   }

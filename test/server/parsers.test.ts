@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { globalDnsProbeDomain } from "../../apps/server/src/diagnostics/constants";
 import { parseCommandOutput } from "../../apps/server/src/diagnostics/parsers";
 
 const ensureEvidence = (value: unknown): string[] => {
@@ -122,7 +123,7 @@ test("parseCommandOutput: dns_lookup 解析失败", () => {
 
 test("parseCommandOutput: global_dns_probe 会补充 probeDomain", () => {
   const output = [
-    "Name:    baidu.com",
+    `Name:    ${globalDnsProbeDomain}`,
     "Address: 93.184.216.34",
     ""
   ].join("\n");
@@ -133,9 +134,9 @@ test("parseCommandOutput: global_dns_probe 会补充 probeDomain", () => {
     evidence: unknown;
   };
 
-  assert.equal(result.structured.probeDomain, "baidu.com");
+  assert.equal(result.structured.probeDomain, globalDnsProbeDomain);
   assert.equal(result.structured.resolved, true);
-  assert.ok(result.diagnosis.join("；").includes("全局 DNS 探测可解析 baidu.com"));
+  assert.ok(result.diagnosis.join("；").includes(`全局 DNS 探测可解析 ${globalDnsProbeDomain}`));
   ensureEvidence(result.evidence);
 });
 

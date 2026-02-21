@@ -1,4 +1,6 @@
-﻿type ParseResult = {
+﻿import { globalDnsProbeDomain } from "./constants";
+
+type ParseResult = {
   structured: Record<string, string | number | boolean>;
   diagnosis: string[];
   evidence?: string[];
@@ -87,7 +89,10 @@ const parseDnsLookup = (output: string): ParseResult => {
   const structured: Record<string, string | number | boolean> = {};
   const diagnosis: string[] = [];
 
-  const failure = /(non-existent domain|can't find|timed out|server failed|NXDOMAIN|SERVFAIL)/i.test(output);
+  const failure =
+    /(non-existent domain|can't find|timed out|server failed|NXDOMAIN|SERVFAIL|does not exist|no such host)/i.test(
+      output
+    );
   const ipv4Addresses = unique(output.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) ?? []);
   const ipv6Addresses = unique(output.match(/\b(?:[A-F0-9]{1,4}:){2,7}[A-F0-9]{1,4}\b/gi) ?? []);
 
@@ -294,15 +299,15 @@ const parseGlobalDnsProbe = (output: string): ParseResult => {
   const diagnosis = [...base.diagnosis];
 
   if (base.structured.resolved === true) {
-    diagnosis.push("全局 DNS 探测可解析 baidu.com。");
+    diagnosis.push(`全局 DNS 探测可解析 ${globalDnsProbeDomain}。`);
   } else {
-    diagnosis.push("全局 DNS 探测无法解析 baidu.com。");
+    diagnosis.push(`全局 DNS 探测无法解析 ${globalDnsProbeDomain}。`);
   }
 
   return {
     structured: {
       ...base.structured,
-      probeDomain: "baidu.com"
+      probeDomain: globalDnsProbeDomain
     },
     diagnosis
   };
