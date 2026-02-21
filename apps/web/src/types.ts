@@ -28,3 +28,29 @@ export interface StreamEvent {
   type: "start" | "log" | "error" | "complete";
   payload: Record<string, unknown>;
 }
+
+export type SignalQuality = "excellent" | "good" | "fair" | "weak" | "none";
+
+export interface RealtimeMetricsSnapshot {
+  timestamp: string;
+  latencyTarget: string;
+  connected: boolean;
+  interfaceName: string;
+  interfaceAlias: string;
+  latencyMs: number | null;
+  downloadBytesPerSecond: number;
+  uploadBytesPerSecond: number;
+  downloadMaxBytesPerSecond: number | null;
+  uploadMaxBytesPerSecond: number | null;
+  signalDbm: number | null;
+  signalPercent: number | null;
+  signalQuality: SignalQuality;
+  note: string;
+}
+
+export interface RealtimeMetricsEvent {
+  type: "metrics";
+  payload: {
+    snapshot: RealtimeMetricsSnapshot;
+  };
+}

@@ -1,4 +1,10 @@
-﻿import { CommandDefinition, JobSnapshot, StreamEvent } from "./types";
+﻿import {
+  CommandDefinition,
+  JobSnapshot,
+  RealtimeMetricsEvent,
+  RealtimeMetricsSnapshot,
+  StreamEvent
+} from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
@@ -69,4 +75,105 @@ export const subscribeJob = (
   };
 
   return () => source.close();
+};
+
+const isRealtimeMetricsEvent = (value: unknown): value is RealtimeMetricsEvent => {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const event = value as Partial<RealtimeMetricsEvent>;
+  if (event.type !== "metrics" || !event.payload || typeof event.payload !== "object") {
+    return false;
+  }
+
+  const snapshot = (event.payload as { snapshot?: unknown }).snapshot;
+  return Boolean(snapshot && typeof snapshot === "object");
+};
+
+const parseApiErrorMessage = async (response: Response, fallback: string): Promise<string> => {
+  const text = await response.text();
+  if (!text) {
+    return fallback;
+  }
+
+  try {
+    const parsed = JSON.parse(text) as { message?: unknown };
+    if (typeof parsed.message === "string" && parsed.message.trim()) {
+      return parsed.message.trim();
+    }
+  } catch {
+    // ignore parse failure and fallback
+  }
+
+  return fallback;
+};
+
+export const subscribeRealtimeMetrics = (
+  latencyTarget: string,
+  onSnapshot: (snapshot: RealtimeMetricsSnapshot) => void,
+  onError: (error: string) => void
+): (() => void) => {
+  let closed = false;
+  let source: EventSource | null = null;
+  const normalizedTarget = latencyTarget.trim();
+  const query = normalizedTarget ? `?target=${encodeURIComponent(normalizedTarget)}` : "";
+  const accessUrl = `${API_BASE}/api/realtime/access`;
+  const streamUrl = `${API_BASE}/api/realtime/stream${query}`;
+
+  const connect = (): void => {
+    if (closed) {
+      return;
+    }
+
+    source = new EventSource(streamUrl);
+
+    source.onmessage = (message) => {
+      try {
+        const event = JSON.parse(message.data) as unknown;
+        if (!isRealtimeMetricsEvent(event)) {
+          onError("实时指标消息格式异常");
+          return;
+        }
+        onSnapshot(event.payload.snapshot);
+      } catch (_error) {
+        onError("实时指标消息解析失败");
+      }
+    };
+
+    source.onerror = () => {
+      onError("实时连接中断，请确认后端仍以管理员身份运行。");
+      source?.close();
+      source = null;
+    };
+  };
+
+  void fetch(accessUrl)
+    .then(async (response) => {
+      if (closed) {
+        return;
+      }
+
+      if (!response.ok) {
+        const message = await parseApiErrorMessage(
+          response,
+          "实时面板需要管理员权限，请以管理员身份运行后端服务。"
+        );
+        onError(message);
+        return;
+      }
+
+      connect();
+    })
+    .catch(() => {
+      if (!closed) {
+        onError("无法连接实时服务，请检查后端是否已启动。");
+      }
+    });
+
+  return () => {
+    closed = true;
+    source?.close();
+    source = null;
+  };
 };

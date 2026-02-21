@@ -265,6 +265,61 @@ test("parseCommandOutput: nic_link_status 统计 Up/Down", () => {
   ensureEvidence(result.evidence);
 });
 
+test("parseCommandOutput: virtual_adapter_check 识别虚拟网卡与默认路由", () => {
+  const output = JSON.stringify({
+    Adapters: [
+      { Name: "Ethernet", InterfaceDescription: "Intel(R) Ethernet", Status: "Up", InterfaceIndex: 12 },
+      {
+        Name: "vEthernet (Default Switch)",
+        InterfaceDescription: "Hyper-V Virtual Ethernet Adapter",
+        Status: "Up",
+        InterfaceIndex: 5
+      }
+    ],
+    DefaultRoutes: [{ InterfaceIndex: 5, InterfaceAlias: "vEthernet", NextHop: "192.168.1.1" }]
+  });
+
+  const result = parseCommandOutput("virtual_adapter_check", output, 0) as unknown as {
+    structured: Record<string, unknown>;
+    diagnosis: string[];
+    evidence: unknown;
+  };
+
+  assert.equal(result.structured.virtualAdapterCount, 1);
+  assert.equal(result.structured.physicalAdapterCount, 1);
+  assert.equal(result.structured.defaultRouteIsVirtual, true);
+  assert.ok(result.diagnosis.join("；").includes("虚拟网卡"));
+  ensureEvidence(result.evidence);
+});
+
+test("parseCommandOutput: virtual_adapter_check supports JSON prefix", () => {
+  const json = JSON.stringify({
+    Adapters: [
+      { Name: "Ethernet", InterfaceDescription: "Intel(R) Ethernet", Status: "Up", InterfaceIndex: 12 },
+      {
+        Name: "vEthernet (Default Switch)",
+        InterfaceDescription: "Hyper-V Virtual Ethernet Adapter",
+        Status: "Up",
+        InterfaceIndex: 5
+      }
+    ],
+    DefaultRoutes: [{ InterfaceIndex: 5, InterfaceAlias: "vEthernet", NextHop: "192.168.1.1" }]
+  });
+
+  const output = ["Total adapters: 2", `JSON:${json}`].join("\n");
+
+  const result = parseCommandOutput("virtual_adapter_check", output, 0) as unknown as {
+    structured: Record<string, unknown>;
+    diagnosis: string[];
+    evidence: unknown;
+  };
+
+  assert.equal(result.structured.virtualAdapterCount, 1);
+  assert.equal(result.structured.physicalAdapterCount, 1);
+  assert.equal(result.structured.defaultRouteIsVirtual, true);
+  ensureEvidence(result.evidence);
+});
+
 test("parseCommandOutput: nic_ip_config 可解析 IPv4 与默认网关", () => {
   const output = [
     "Windows IP Configuration",
@@ -406,6 +461,26 @@ test("parseCommandOutput: ie_proxy_check 可解析 ProxyEnable/ProxyServer", () 
   assert.equal(result.structured.proxyEnabled, true);
   assert.equal(result.structured.hasProxyServer, true);
   assert.equal(result.structured.hasPacUrl, false);
+  ensureEvidence(result.evidence);
+});
+
+test("parseCommandOutput: winhttp_proxy_check 可解析代理与直连", () => {
+  const output = [
+    "Current WinHTTP proxy settings:",
+    "",
+    "    Proxy Server(s) :  http=proxy.local:8080;https=proxy.local:8080",
+    "    Bypass List     :  *.local;127.0.0.1",
+    ""
+  ].join("\n");
+
+  const result = parseCommandOutput("winhttp_proxy_check", output, 0) as unknown as {
+    structured: Record<string, unknown>;
+    diagnosis: string[];
+    evidence: unknown;
+  };
+
+  assert.equal(result.structured.winhttpProxyEnabled, true);
+  assert.ok(String(result.structured.winhttpProxyServer ?? "").includes("proxy.local"));
   ensureEvidence(result.evidence);
 });
 

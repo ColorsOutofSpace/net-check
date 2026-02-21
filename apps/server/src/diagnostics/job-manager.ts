@@ -166,7 +166,7 @@ class JobManager {
     }
 
     const executable = runtimeDefinition.build(input);
-    const commandLine = `${executable.command} ${executable.args.join(" ")}`;
+    const commandLine = executable.displayCommandLine ?? `${executable.command} ${executable.args.join(" ")}`;
 
     this.emit(job, {
       type: "start",

@@ -1,4 +1,4 @@
-export type WorkflowStatus = "pending" | "running" | "completed" | "failed";
+﻿export type WorkflowStatus = "pending" | "running" | "completed" | "failed";
 export type LayerStatus = "pending" | "running" | "passed" | "warning" | "failed";
 
 export interface WorkflowItem {
@@ -65,6 +65,14 @@ export const hasWarning = (item: WorkflowItem): boolean => {
       return true;
     }
     return false;
+  }
+
+  if (item.commandId === "proxy_conflict_check") {
+    return item.structured.proxyConflict === true;
+  }
+
+  if (item.commandId === "virtual_adapter_check") {
+    return item.structured.defaultRouteIsVirtual === true;
   }
 
   const packetLoss = item.structured.packetLossPercent;
@@ -136,6 +144,15 @@ export const buildSummary = (workflowItems: WorkflowItem[], layerDefinitions: La
     });
   }
 
+  const virtualAdapter = byId.get("virtual_adapter_check");
+  if (virtualAdapter?.structured.defaultRouteIsVirtual === true) {
+    causes.push({
+      title: "虚拟网卡接管默认路由",
+      evidence: firstEvidence(virtualAdapter, "默认路由由虚拟网卡承担。"),
+      severity: "medium"
+    });
+  }
+
   const route = byId.get("default_route_check");
   if (route?.structured.hasDefaultRoute === false) {
     causes.push({
@@ -151,6 +168,15 @@ export const buildSummary = (workflowItems: WorkflowItem[], layerDefinitions: La
       title: "DNS 解析失败",
       evidence: firstEvidence(dns, "全局 DNS 探测无法解析 example.com。"),
       severity: "high"
+    });
+  }
+
+  const proxyConflict = byId.get("proxy_conflict_check");
+  if (proxyConflict?.structured.proxyConflict === true) {
+    causes.push({
+      title: "代理配置冲突",
+      evidence: firstEvidence(proxyConflict, "系统代理与环境变量代理同时设置。"),
+      severity: "medium"
     });
   }
 
@@ -205,4 +231,3 @@ export const buildSummary = (workflowItems: WorkflowItem[], layerDefinitions: La
     causes: causes.slice(0, 3)
   };
 };
-

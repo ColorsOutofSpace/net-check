@@ -33,6 +33,24 @@ test("hasWarning: nic_link_status adapterCount>0 且 linkUpCount=0 应告警", (
   assert.equal(hasWarning(item), true);
 });
 
+test("hasWarning: proxy_conflict_check 冲突应告警", () => {
+  const item = baseItem({
+    commandId: "proxy_conflict_check",
+    structured: { proxyConflict: true }
+  });
+
+  assert.equal(hasWarning(item), true);
+});
+
+test("hasWarning: virtual_adapter_check 默认路由虚拟网卡应告警", () => {
+  const item = baseItem({
+    commandId: "virtual_adapter_check",
+    structured: { defaultRouteIsVirtual: true }
+  });
+
+  assert.equal(hasWarning(item), true);
+});
+
 test("buildSummary: 无根因命中但存在失败项时给出失败提示", () => {
   const layers: LayerDefinition[] = [{ id: "adapter", label: "适配器", commandIds: ["nic_link_status"] }];
   const items: WorkflowItem[] = [
@@ -67,6 +85,36 @@ test("buildSummary: nic 根因优先使用 evidence", () => {
   assert.ok(summary.causes.length > 0);
   assert.equal(summary.causes[0].title, "没有可用网卡");
   assert.equal(summary.causes[0].evidence, "证据A");
+});
+
+test("buildSummary: 代理冲突触发根因", () => {
+  const layers: LayerDefinition[] = [{ id: "proxy", label: "代理", commandIds: ["proxy_conflict_check"] }];
+  const items: WorkflowItem[] = [
+    baseItem({
+      commandId: "proxy_conflict_check",
+      commandTitle: "代理冲突检测",
+      structured: { proxyConflict: true },
+      evidence: ["系统代理与环境变量代理同时设置。"]
+    })
+  ];
+
+  const summary = buildSummary(items, layers);
+  assert.ok(summary.causes.some((cause) => cause.title === "代理配置冲突"));
+});
+
+test("buildSummary: 虚拟网卡接管默认路由触发根因", () => {
+  const layers: LayerDefinition[] = [{ id: "adapter", label: "适配器", commandIds: ["virtual_adapter_check"] }];
+  const items: WorkflowItem[] = [
+    baseItem({
+      commandId: "virtual_adapter_check",
+      commandTitle: "虚拟网卡与路由检测",
+      structured: { defaultRouteIsVirtual: true },
+      evidence: ["默认路由由虚拟网卡承担。"]
+    })
+  ];
+
+  const summary = buildSummary(items, layers);
+  assert.ok(summary.causes.some((cause) => cause.title === "虚拟网卡接管默认路由"));
 });
 
 test("buildSummary: 无根因命中但存在告警时给出告警提示", () => {

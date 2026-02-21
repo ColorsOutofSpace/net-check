@@ -336,6 +336,153 @@ const parseNicLinkStatus = (output: string): ParseResult => {
   return { structured, diagnosis };
 };
 
+const parseVirtualAdapterCheck = (output: string): ParseResult => {
+  const structured: Record<string, string | number | boolean> = {};
+  const diagnosis: string[] = [];
+
+  const extractJsonPayload = (value: string): string => {
+    const jsonIndex = value.indexOf("JSON:");
+    if (jsonIndex !== -1) {
+      return value.slice(jsonIndex + 5).trim();
+    }
+
+    const trimmed = value.trim();
+    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+      return trimmed;
+    }
+
+    const firstBrace = trimmed.indexOf("{");
+    if (firstBrace !== -1) {
+      return trimmed.slice(firstBrace).trim();
+    }
+
+    return "";
+  };
+
+  const jsonPayload = extractJsonPayload(output);
+
+  const virtualKeywords = [
+    "virtual",
+    "vmware",
+    "virtualbox",
+    "hyper-v",
+    "vethernet",
+    "tap",
+    "tun",
+    "wireguard",
+    "openvpn",
+    "anyconnect",
+    "fortinet",
+    "zscaler",
+    "wintun",
+    "loopback",
+    "npcap",
+    "vpn"
+  ];
+
+  const isVirtualAdapter = (name: string): boolean => {
+    const lower = name.toLowerCase();
+    return virtualKeywords.some((keyword) => lower.includes(keyword));
+  };
+
+  try {
+    if (!jsonPayload) {
+      diagnosis.push("无法解析虚拟网卡与默认路由信息。");
+      return { structured, diagnosis };
+    }
+
+    const parsed = JSON.parse(jsonPayload) as {
+      Adapters?: Array<{
+        Name?: string;
+        InterfaceDescription?: string;
+        Status?: string;
+        InterfaceIndex?: number;
+      }>;
+      DefaultRoutes?: Array<{
+        InterfaceIndex?: number;
+        InterfaceAlias?: string;
+        NextHop?: string;
+      }>;
+    };
+
+    const adapters = Array.isArray(parsed.Adapters) ? parsed.Adapters : [];
+    const routes = Array.isArray(parsed.DefaultRoutes) ? parsed.DefaultRoutes : [];
+
+    let virtualCount = 0;
+    let physicalCount = 0;
+    let virtualUpCount = 0;
+    let physicalUpCount = 0;
+
+    const adapterIndexMap = new Map<number, { name: string; isVirtual: boolean; status?: string }>();
+
+    adapters.forEach((adapter) => {
+      const name = `${adapter.Name ?? ""} ${adapter.InterfaceDescription ?? ""}`.trim();
+      const virtual = isVirtualAdapter(name);
+      const status = adapter.Status ?? "";
+      if (virtual) {
+        virtualCount += 1;
+        if (/Up|Connected/i.test(status)) {
+          virtualUpCount += 1;
+        }
+      } else {
+        physicalCount += 1;
+        if (/Up|Connected/i.test(status)) {
+          physicalUpCount += 1;
+        }
+      }
+
+      if (typeof adapter.InterfaceIndex === "number") {
+        adapterIndexMap.set(adapter.InterfaceIndex, {
+          name: adapter.Name ?? adapter.InterfaceDescription ?? "",
+          isVirtual: virtual,
+          status
+        });
+      }
+    });
+
+    structured.adapterCount = adapters.length;
+    structured.virtualAdapterCount = virtualCount;
+    structured.physicalAdapterCount = physicalCount;
+    structured.virtualAdapterUpCount = virtualUpCount;
+    structured.physicalAdapterUpCount = physicalUpCount;
+
+    const defaultRoute = routes[0];
+    if (defaultRoute) {
+      if (typeof defaultRoute.InterfaceIndex === "number") {
+        structured.defaultRouteInterfaceIndex = defaultRoute.InterfaceIndex;
+        const adapter = adapterIndexMap.get(defaultRoute.InterfaceIndex);
+        if (adapter) {
+          structured.defaultRouteInterfaceName = adapter.name;
+          structured.defaultRouteIsVirtual = adapter.isVirtual;
+        }
+      }
+      if (defaultRoute.InterfaceAlias) {
+        structured.defaultRouteInterfaceAlias = defaultRoute.InterfaceAlias;
+      }
+      if (defaultRoute.NextHop) {
+        structured.defaultRouteNextHop = defaultRoute.NextHop;
+      }
+    }
+
+    if (virtualCount === 0) {
+      diagnosis.push("未检测到虚拟网卡。");
+    } else {
+      diagnosis.push(`检测到 ${virtualCount} 个虚拟网卡。`);
+    }
+
+    if (structured.defaultRouteIsVirtual === true) {
+      diagnosis.push("默认路由由虚拟网卡承担，可能是 VPN/代理接管出口。");
+    } else if (structured.defaultRouteIsVirtual === false) {
+      diagnosis.push("默认路由由物理网卡承担。");
+    }
+
+    return { structured, diagnosis };
+  } catch {
+    diagnosis.push("无法解析虚拟网卡与默认路由信息。");
+    return { structured, diagnosis };
+  }
+};
+
 const parseNicIpConfig = (output: string): ParseResult => {
   const structured: Record<string, string | number | boolean> = {};
   const diagnosis: string[] = [];
@@ -620,6 +767,43 @@ const parseProxyConflictCheck = (output: string): ParseResult => {
   return { structured, diagnosis };
 };
 
+const parseWinhttpProxyCheck = (output: string): ParseResult => {
+  const structured: Record<string, string | number | boolean> = {};
+  const diagnosis: string[] = [];
+
+  const direct =
+    /Direct access|Directly access|直接访问|不使用代理/i.test(output) ||
+    /No proxy server|没有代理服务器/i.test(output);
+  const proxyMatch =
+    output.match(/Proxy Server\(s\)\s*:\s*([^\r\n]+)/i) ||
+    output.match(/代理服务器\s*:\s*([^\r\n]+)/i);
+  const bypassMatch =
+    output.match(/Bypass List\s*:\s*([^\r\n]+)/i) ||
+    output.match(/绕过列表\s*:\s*([^\r\n]+)/i);
+
+  if (direct && !proxyMatch) {
+    structured.winhttpProxyEnabled = false;
+    structured.winhttpProxyMode = "direct";
+    diagnosis.push("WinHTTP 未配置代理。");
+    return { structured, diagnosis };
+  }
+
+  if (proxyMatch) {
+    const proxyServer = maskProxyValue(proxyMatch[1].trim());
+    structured.winhttpProxyEnabled = true;
+    structured.winhttpProxyMode = "proxy";
+    structured.winhttpProxyServer = proxyServer;
+    if (bypassMatch) {
+      structured.winhttpBypassList = bypassMatch[1].trim();
+    }
+    diagnosis.push("WinHTTP 已配置代理。");
+    return { structured, diagnosis };
+  }
+
+  diagnosis.push("未解析到 WinHTTP 代理配置。");
+  return { structured, diagnosis };
+};
+
 const maskProxyValue = (value: string): string =>
   value.replace(/\/\/([^:@/\s]+):([^@/\s]+)@/g, "//$1:***@");
 
@@ -716,6 +900,8 @@ export const parseCommandOutput = (commandId: string, output: string, exitCode: 
     parsed = parseHttp(output);
   } else if (commandId === "nic_link_status") {
     parsed = parseNicLinkStatus(output);
+  } else if (commandId === "virtual_adapter_check") {
+    parsed = parseVirtualAdapterCheck(output);
   } else if (commandId === "nic_ip_config") {
     parsed = parseNicIpConfig(output);
   } else if (commandId === "dhcp_status") {
@@ -730,6 +916,8 @@ export const parseCommandOutput = (commandId: string, output: string, exitCode: 
     parsed = parseLspCatalogCheck(output);
   } else if (commandId === "ie_proxy_check") {
     parsed = parseIeProxyCheck(output);
+  } else if (commandId === "winhttp_proxy_check") {
+    parsed = parseWinhttpProxyCheck(output);
   } else if (commandId === "proxy_conflict_check") {
     parsed = parseProxyConflictCheck(output);
   } else if (commandId === "network_env_vars") {

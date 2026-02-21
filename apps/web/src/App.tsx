@@ -1,6 +1,6 @@
 ﻿
 import { type CSSProperties, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
-import { createJob, fetchCommands, subscribeJob } from "./api";
+import { createJob, fetchCommands, subscribeJob, subscribeRealtimeMetrics } from "./api";
 import {
   buildSummary,
   hasWarning,
@@ -9,9 +9,9 @@ import {
   type WorkflowItem,
   type WorkflowStatus
 } from "./analysis";
-import { CommandDefinition, JobSnapshot, StreamEvent } from "./types";
+import { CommandDefinition, JobSnapshot, RealtimeMetricsSnapshot, SignalQuality, StreamEvent } from "./types";
 
-type PanelTab = "overview" | "output";
+type PanelTab = "overview" | "realtime" | "output";
 
 const orderStorageKey = "net-check.one-click-order.v1";
 const concurrencyStorageKey = "net-check.one-click-concurrency.v1";
@@ -25,6 +25,12 @@ const defaultSidebarWidth = 340;
 const minSidebarWidth = 280;
 const maxSidebarWidth = 620;
 const minContentWidth = 480;
+const realtimeHistoryLimit = 30;
+const realtimeTargetStorageKey = "net-check.realtime-target.v1";
+const defaultRealtimeLatencyTarget = "1.1.1.1";
+const realtimeTargetPattern = /^[a-zA-Z0-9._:-]+$/;
+const realtimeTargetPresets = ["1.1.1.1", "8.8.8.8", "223.5.5.5", "114.114.114.114", "baidu.com", "openai.com"];
+const hiddenSidebarCommandIds = new Set(["ping_target"]);
 
 const clampSidebarWidth = (value: number, viewportWidth?: number): number => {
   const width = Number.isFinite(value) ? Math.floor(value) : defaultSidebarWidth;
@@ -46,8 +52,27 @@ const readStoredSidebarWidth = (): number => {
   return clampSidebarWidth(Number(raw), window.innerWidth);
 };
 
+const readStoredRealtimeTarget = (): string => {
+  if (typeof window === "undefined") {
+    return defaultRealtimeLatencyTarget;
+  }
+
+  const raw = window.localStorage.getItem(realtimeTargetStorageKey);
+  if (!raw) {
+    return defaultRealtimeLatencyTarget;
+  }
+
+  const normalized = raw.trim();
+  if (!normalized || !realtimeTargetPattern.test(normalized)) {
+    return defaultRealtimeLatencyTarget;
+  }
+
+  return normalized;
+};
+
 const globalPresetIds = [
   "nic_link_status",
+  "virtual_adapter_check",
   "nic_ip_config",
   "dhcp_status",
   "default_route_check",
@@ -58,6 +83,7 @@ const globalPresetIds = [
   "hosts_file_check",
   "lsp_catalog_check",
   "ie_proxy_check",
+  "winhttp_proxy_check",
   "proxy_conflict_check",
   "network_env_vars",
   "global_internet_icmp",
@@ -65,7 +91,11 @@ const globalPresetIds = [
 ];
 
 const layerDefinitions: LayerDefinition[] = [
-  { id: "adapter", label: "适配器", commandIds: ["nic_link_status", "nic_ip_config", "dhcp_status"] },
+  {
+    id: "adapter",
+    label: "适配器",
+    commandIds: ["nic_link_status", "virtual_adapter_check", "nic_ip_config", "dhcp_status"]
+  },
   {
     id: "route",
     label: "路由",
@@ -79,7 +109,7 @@ const layerDefinitions: LayerDefinition[] = [
   {
     id: "proxy",
     label: "代理",
-    commandIds: ["ie_proxy_check", "proxy_conflict_check", "network_env_vars", "lsp_catalog_check"]
+    commandIds: ["ie_proxy_check", "winhttp_proxy_check", "proxy_conflict_check", "network_env_vars", "lsp_catalog_check"]
   },
   { id: "internet", label: "互联网", commandIds: ["global_internet_icmp", "http_head", "ping_target"] }
 ];
@@ -161,6 +191,60 @@ const formatLayerStatus = (status: LayerStatus): string => {
   return "失败";
 };
 
+const formatBytesPerSecond = (value: number): string => {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "0 KB/s";
+  }
+
+  if (value >= 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(2)} MB/s`;
+  }
+
+  if (value >= 1024) {
+    return `${(value / 1024).toFixed(1)} KB/s`;
+  }
+
+  return `${value.toFixed(0)} B/s`;
+};
+
+const formatLinkLimit = (value: number | null): string => {
+  if (!value || value <= 0) {
+    return "-";
+  }
+  return `${((value * 8) / 1_000_000).toFixed(0)} Mbps`;
+};
+
+const toUtilizationPercent = (current: number, maximum: number | null): number | null => {
+  if (!maximum || maximum <= 0 || !Number.isFinite(current) || current < 0) {
+    return null;
+  }
+
+  const ratio = (current / maximum) * 100;
+  return Math.max(0, Math.min(100, ratio));
+};
+
+const formatLatency = (latencyMs: number | null): string => {
+  if (latencyMs === null || !Number.isFinite(latencyMs)) {
+    return "--";
+  }
+  return `${Math.round(latencyMs)} ms`;
+};
+
+const signalQualityLabel: Record<SignalQuality, string> = {
+  excellent: "优秀",
+  good: "良好",
+  fair: "一般",
+  weak: "较弱",
+  none: "不可用"
+};
+
+const resolveSignalLevel = (signalPercent: number | null): number => {
+  if (signalPercent === null || signalPercent <= 0) {
+    return 0;
+  }
+  return Math.max(1, Math.min(5, Math.round(signalPercent / 20)));
+};
+
 const App = (): JSX.Element => {
   const [commands, setCommands] = useState<CommandDefinition[]>([]);
   const [loading, setLoading] = useState(true);
@@ -176,10 +260,16 @@ const App = (): JSX.Element => {
   const [workflowItems, setWorkflowItems] = useState<WorkflowItem[]>([]);
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => readStoredSidebarWidth());
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+  const [realtimeLatencyTarget, setRealtimeLatencyTarget] = useState<string>(() => readStoredRealtimeTarget());
+  const [realtimeTargetInput, setRealtimeTargetInput] = useState<string>(() => readStoredRealtimeTarget());
+  const [realtimeSnapshot, setRealtimeSnapshot] = useState<RealtimeMetricsSnapshot | null>(null);
+  const [realtimeHistory, setRealtimeHistory] = useState<RealtimeMetricsSnapshot[]>([]);
+  const [realtimeError, setRealtimeError] = useState<string | null>(null);
 
   const stopStreamRef = useRef<(() => void) | null>(null);
   const batchStopRefs = useRef<Set<() => void>>(new Set());
   const resizeSessionRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const realtimeStopRef = useRef<(() => void) | null>(null);
 
   const appendOutput = (text: string): void => {
     setOutput((current) => current + text);
@@ -190,8 +280,11 @@ const App = (): JSX.Element => {
       try {
         const loaded = await fetchCommands();
         setCommands(loaded);
+        const sidebarCommands = loaded.filter((command) => !hiddenSidebarCommandIds.has(command.id));
 
-        if (loaded.length > 0) {
+        if (sidebarCommands.length > 0) {
+          setSelectedCommandId(sidebarCommands[0].id);
+        } else if (loaded.length > 0) {
           setSelectedCommandId(loaded[0].id);
         }
 
@@ -208,8 +301,10 @@ const App = (): JSX.Element => {
           }
         }
 
-        const validStoredOrder = storedOrder.filter((id) => loaded.some((command) => command.id === id));
-        setOneClickOrder(validStoredOrder.length > 0 ? validStoredOrder : buildGlobalPresetOrder(loaded));
+        const validStoredOrder = storedOrder.filter(
+          (id) => sidebarCommands.some((command) => command.id === id)
+        );
+        setOneClickOrder(validStoredOrder.length > 0 ? validStoredOrder : buildGlobalPresetOrder(sidebarCommands));
 
         const rawConcurrency = window.localStorage.getItem(concurrencyStorageKey);
         const parsedConcurrency = rawConcurrency ? Number(rawConcurrency) : defaultConcurrency;
@@ -231,8 +326,42 @@ const App = (): JSX.Element => {
 
       batchStopRefs.current.forEach((stop) => stop());
       batchStopRefs.current.clear();
+
+      if (realtimeStopRef.current) {
+        realtimeStopRef.current();
+        realtimeStopRef.current = null;
+      }
     };
   }, []);
+
+  useEffect(() => {
+    const stop = subscribeRealtimeMetrics(
+      realtimeLatencyTarget,
+      (snapshot) => {
+        setRealtimeSnapshot(snapshot);
+        setRealtimeError(null);
+        setRealtimeHistory((current) => {
+          const next = [...current, snapshot];
+          if (next.length <= realtimeHistoryLimit) {
+            return next;
+          }
+          return next.slice(next.length - realtimeHistoryLimit);
+        });
+      },
+      (error) => {
+        setRealtimeError(error);
+      }
+    );
+
+    realtimeStopRef.current = stop;
+
+    return () => {
+      stop();
+      if (realtimeStopRef.current === stop) {
+        realtimeStopRef.current = null;
+      }
+    };
+  }, [realtimeLatencyTarget]);
 
   useEffect(() => {
     window.localStorage.setItem(orderStorageKey, JSON.stringify(oneClickOrder));
@@ -241,6 +370,10 @@ const App = (): JSX.Element => {
   useEffect(() => {
     window.localStorage.setItem(concurrencyStorageKey, String(oneClickConcurrency));
   }, [oneClickConcurrency]);
+
+  useEffect(() => {
+    window.localStorage.setItem(realtimeTargetStorageKey, realtimeLatencyTarget);
+  }, [realtimeLatencyTarget]);
 
   useEffect(() => {
     window.localStorage.setItem(sidebarWidthStorageKey, String(sidebarWidth));
@@ -307,7 +440,9 @@ const App = (): JSX.Element => {
   const oneClickCommands = useMemo(
     () =>
       oneClickOrder
-        .map((commandId) => commands.find((command) => command.id === commandId))
+        .map((commandId) =>
+          commands.find((command) => command.id === commandId && !hiddenSidebarCommandIds.has(command.id))
+        )
         .filter((command): command is CommandDefinition => Boolean(command)),
     [commands, oneClickOrder]
   );
@@ -316,6 +451,9 @@ const App = (): JSX.Element => {
     const groups = new Map<string, CommandDefinition[]>();
 
     commands.forEach((command) => {
+      if (hiddenSidebarCommandIds.has(command.id)) {
+        return;
+      }
       const list = groups.get(command.category) ?? [];
       list.push(command);
       groups.set(command.category, list);
@@ -335,6 +473,20 @@ const App = (): JSX.Element => {
   }, [showOnlyIssues, workflowItems]);
 
   const summary = useMemo(() => buildSummary(workflowItems, layerDefinitions), [workflowItems]);
+  const realtimePeak = useMemo(
+    () =>
+      realtimeHistory.reduce(
+        (current, item) => ({
+          downloadBytesPerSecond: Math.max(current.downloadBytesPerSecond, item.downloadBytesPerSecond),
+          uploadBytesPerSecond: Math.max(current.uploadBytesPerSecond, item.uploadBytesPerSecond)
+        }),
+        {
+          downloadBytesPerSecond: 0,
+          uploadBytesPerSecond: 0
+        }
+      ),
+    [realtimeHistory]
+  );
 
   const resolveTarget = (command: CommandDefinition): string | null => {
     const defaultTarget = command.defaultTarget.trim();
@@ -709,6 +861,30 @@ const App = (): JSX.Element => {
     setOneClickOrder(buildGlobalPresetOrder(commands));
   };
 
+  const applyRealtimeLatencyTarget = (): void => {
+    const normalized = realtimeTargetInput.trim();
+
+    if (!normalized) {
+      setRealtimeError("延迟目标不能为空。");
+      return;
+    }
+
+    if (!realtimeTargetPattern.test(normalized)) {
+      setRealtimeError("目标格式无效，仅支持字母、数字、点、下划线、冒号和连字符。");
+      return;
+    }
+
+    setRealtimeError(null);
+    setRealtimeTargetInput(normalized);
+
+    if (normalized === realtimeLatencyTarget) {
+      return;
+    }
+
+    setRealtimeHistory([]);
+    setRealtimeLatencyTarget(normalized);
+  };
+
   const handleSidebarResizeStart = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (event.button !== 0) {
       return;
@@ -744,6 +920,25 @@ const App = (): JSX.Element => {
 
   const isRunningSingle = !isBatchRunning && activeJob?.status === "running";
   const statusClass = isBatchRunning ? "running" : activeJob?.status ?? "idle";
+  const currentRealtime = realtimeSnapshot;
+  const currentLatencyTarget = currentRealtime?.latencyTarget ?? realtimeLatencyTarget;
+  const normalizedRealtimeInput = realtimeTargetInput.trim();
+  const isRealtimePermissionError = Boolean(realtimeError && realtimeError.includes("管理员"));
+  const downloadUtilization = toUtilizationPercent(
+    currentRealtime?.downloadBytesPerSecond ?? 0,
+    currentRealtime?.downloadMaxBytesPerSecond ?? null
+  );
+  const uploadUtilization = toUtilizationPercent(
+    currentRealtime?.uploadBytesPerSecond ?? 0,
+    currentRealtime?.uploadMaxBytesPerSecond ?? null
+  );
+  const signalQuality = currentRealtime?.signalQuality ?? "none";
+  const signalLevel = resolveSignalLevel(currentRealtime?.signalPercent ?? null);
+  const realtimeInterface = currentRealtime?.interfaceName
+    ? `${currentRealtime.interfaceName}${currentRealtime.interfaceAlias ? ` (${currentRealtime.interfaceAlias})` : ""}`
+    : "-";
+  const realtimeSignalDbm =
+    currentRealtime && currentRealtime.signalDbm !== null ? `${currentRealtime.signalDbm} dBm` : "-- dBm";
   const statusLabel =
     isBatchRunning
       ? "运行中"
@@ -924,6 +1119,13 @@ const App = (): JSX.Element => {
           </button>
           <button
             type="button"
+            className={activeTab === "realtime" ? "active" : ""}
+            onClick={() => setActiveTab("realtime")}
+          >
+            实时面板
+          </button>
+          <button
+            type="button"
             className={activeTab === "output" ? "active" : ""}
             onClick={() => setActiveTab("output")}
           >
@@ -1023,6 +1225,119 @@ const App = (): JSX.Element => {
                   })}
                 </div>
               </div>
+            </div>
+          )}
+
+          {activeTab === "realtime" && (
+            <div className="realtime-panel">
+              <div className="realtime-header">
+                <div>
+                  <h3>当前网络状态</h3>
+                  <p>接口: {realtimeInterface}</p>
+                </div>
+                <span>更新时间: {formatDateTime(currentRealtime?.timestamp)}</span>
+              </div>
+
+              <div className="realtime-target-controls">
+                <label htmlFor="realtime-latency-target">延迟探测目标</label>
+                <div className="realtime-target-row">
+                  <input
+                    id="realtime-latency-target"
+                    list="realtime-target-presets"
+                    value={realtimeTargetInput}
+                    onChange={(event) => setRealtimeTargetInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        applyRealtimeLatencyTarget();
+                      }
+                    }}
+                    placeholder="输入 IP 或域名"
+                  />
+                  <button
+                    type="button"
+                    onClick={applyRealtimeLatencyTarget}
+                    disabled={normalizedRealtimeInput.length === 0 || normalizedRealtimeInput === realtimeLatencyTarget}
+                  >
+                    应用
+                  </button>
+                </div>
+                <datalist id="realtime-target-presets">
+                  {realtimeTargetPresets.map((target) => (
+                    <option key={target} value={target} />
+                  ))}
+                </datalist>
+              </div>
+
+              {realtimeError && <div className="realtime-error">{realtimeError}</div>}
+              {isRealtimePermissionError && (
+                <div className="realtime-guide">
+                  <p>请按以下步骤启动管理员模式：</p>
+                  <p>1. 关闭当前终端，右键 PowerShell/Windows Terminal 选择“以管理员身份运行”。</p>
+                  <p>2. 进入项目目录后重新执行 `npm run dev` 或 `npm run dev:server`。</p>
+                </div>
+              )}
+
+              <div className="realtime-grid">
+                <article className="realtime-card">
+                  <h4>网络延迟</h4>
+                  <strong>{formatLatency(currentRealtime?.latencyMs ?? null)}</strong>
+                  <p>探测目标: {currentLatencyTarget}</p>
+                </article>
+
+                <article className="realtime-card">
+                  <h4>下行流量</h4>
+                  <strong>{formatBytesPerSecond(currentRealtime?.downloadBytesPerSecond ?? 0)}</strong>
+                  <p>上限: {formatLinkLimit(currentRealtime?.downloadMaxBytesPerSecond ?? null)}</p>
+                  <div className="realtime-meter">
+                    <div
+                      className="realtime-meter-fill"
+                      style={{ width: `${downloadUtilization?.toFixed(1) ?? "0"}%` }}
+                    />
+                  </div>
+                  <span className="realtime-meta">
+                    {downloadUtilization === null
+                      ? "未检测到链路上限"
+                      : `占用 ${downloadUtilization.toFixed(1)}% · 峰值 ${formatBytesPerSecond(realtimePeak.downloadBytesPerSecond)}`}
+                  </span>
+                </article>
+
+                <article className="realtime-card">
+                  <h4>上行流量</h4>
+                  <strong>{formatBytesPerSecond(currentRealtime?.uploadBytesPerSecond ?? 0)}</strong>
+                  <p>上限: {formatLinkLimit(currentRealtime?.uploadMaxBytesPerSecond ?? null)}</p>
+                  <div className="realtime-meter">
+                    <div
+                      className="realtime-meter-fill upload"
+                      style={{ width: `${uploadUtilization?.toFixed(1) ?? "0"}%` }}
+                    />
+                  </div>
+                  <span className="realtime-meta">
+                    {uploadUtilization === null
+                      ? "未检测到链路上限"
+                      : `占用 ${uploadUtilization.toFixed(1)}% · 峰值 ${formatBytesPerSecond(realtimePeak.uploadBytesPerSecond)}`}
+                  </span>
+                </article>
+
+                <article className={`realtime-card signal ${signalQuality}`}>
+                  <h4>信号强度</h4>
+                  <strong>{realtimeSignalDbm}</strong>
+                  <p>
+                    质量: {signalQualityLabel[signalQuality]}
+                    {currentRealtime?.signalPercent !== null && currentRealtime?.signalPercent !== undefined
+                      ? ` (${currentRealtime.signalPercent}%)`
+                      : ""}
+                  </p>
+                  <div className="signal-meter" role="img" aria-label="信号强度可视化">
+                    {[1, 2, 3, 4, 5].map((item) => (
+                      <span key={item} className={item <= signalLevel ? "active" : ""} />
+                    ))}
+                  </div>
+                  <span className="realtime-meta">dBm 基于系统 Signal% 估算，用于直观参考。</span>
+                </article>
+              </div>
+
+              <p className="realtime-note">{currentRealtime?.note || "正在采样实时网络数据..."}</p>
             </div>
           )}
 

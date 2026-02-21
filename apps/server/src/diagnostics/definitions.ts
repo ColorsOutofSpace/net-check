@@ -218,6 +218,77 @@ const commandDefinitions: CommandRuntimeDefinition[] = [
     }
   },
   {
+    id: "virtual_adapter_check",
+    title: "虚拟网卡与路由检测",
+    description: "识别虚拟网卡并判断默认路由是否由虚拟网卡承担。",
+    category: "网络接口",
+    targetHint: "无需填写目标。",
+    defaultTarget: "localhost",
+    supportsCount: false,
+    requiresTarget: false,
+    build: () => {
+      if (isWindows) {
+        return {
+          command: "powershell",
+          args: [
+            "-NoProfile",
+            "-Command",
+            "$adapters = Get-NetAdapter | Select-Object Name,InterfaceDescription,Status,LinkSpeed,InterfaceIndex,MacAddress; " +
+              "$routes = Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 3 InterfaceIndex,InterfaceAlias,NextHop,RouteMetric; " +
+              "$pattern = 'virtual|vmware|virtualbox|hyper-v|vethernet|tap|tun|wireguard|openvpn|anyconnect|fortinet|zscaler|wintun|loopback|npcap|vpn'; " +
+              "$virtualAdapters = $adapters | Where-Object { (\"$($_.Name) $($_.InterfaceDescription)\") -match $pattern }; " +
+              "$physicalAdapters = $adapters | Where-Object { (\"$($_.Name) $($_.InterfaceDescription)\") -notmatch $pattern }; " +
+              "$total = ($adapters | Measure-Object).Count; " +
+              "$virtualCount = ($virtualAdapters | Measure-Object).Count; " +
+              "$physicalCount = ($physicalAdapters | Measure-Object).Count; " +
+              "$virtualUpCount = ($virtualAdapters | Where-Object { $_.Status -match 'Up|Connected' } | Measure-Object).Count; " +
+              "$physicalUpCount = ($physicalAdapters | Where-Object { $_.Status -match 'Up|Connected' } | Measure-Object).Count; " +
+              "Write-Output '== 汇总 =='; " +
+              "Write-Output \"适配器总数: $total\"; " +
+              "Write-Output \"虚拟网卡数量: $virtualCount\"; " +
+              "Write-Output \"物理网卡数量: $physicalCount\"; " +
+              "Write-Output \"虚拟网卡(Up): $virtualUpCount\"; " +
+              "Write-Output \"物理网卡(Up): $physicalUpCount\"; " +
+              "if ($routes -and $routes.Count -gt 0) { " +
+                "$primary = $routes | Select-Object -First 1; " +
+                "$primaryAdapter = $null; " +
+                "if ($primary.InterfaceIndex) { $primaryAdapter = $adapters | Where-Object { $_.InterfaceIndex -eq $primary.InterfaceIndex } | Select-Object -First 1 }; " +
+                "$primaryType = '未知'; " +
+                "if ($primaryAdapter) { $primaryType = if ((\"$($primaryAdapter.Name) $($primaryAdapter.InterfaceDescription)\") -match $pattern) { '虚拟网卡' } else { '物理网卡' } }; " +
+                "Write-Output \"默认路由: $($primary.InterfaceAlias) -> $($primary.NextHop) (Metric=$($primary.RouteMetric))\"; " +
+                "Write-Output \"默认路由类型: $primaryType\"; " +
+              "} else { Write-Output '未检测到默认路由' }; " +
+              "Write-Output ''; " +
+              "Write-Output '== 虚拟网卡列表 =='; " +
+              "if ($virtualAdapters -and $virtualCount -gt 0) { $virtualAdapters | Select-Object Name,InterfaceDescription,Status,LinkSpeed,InterfaceIndex | Format-Table -AutoSize | Out-String -Width 200 | Write-Output } else { Write-Output '无' }; " +
+              "Write-Output ''; " +
+              "Write-Output '== 物理网卡列表 =='; " +
+              "if ($physicalAdapters -and $physicalCount -gt 0) { $physicalAdapters | Select-Object Name,InterfaceDescription,Status,LinkSpeed,InterfaceIndex | Format-Table -AutoSize | Out-String -Width 200 | Write-Output } else { Write-Output '无' }; " +
+              "Write-Output ''; " +
+              "Write-Output '== 默认路由候选 =='; " +
+              "if ($routes -and $routes.Count -gt 0) { " +
+                "$routeView = $routes | ForEach-Object { " +
+                  "$route = $_; " +
+                  "$adapter = $adapters | Where-Object { $_.InterfaceIndex -eq $route.InterfaceIndex } | Select-Object -First 1; " +
+                  "$type = '未知'; " +
+                  "if ($adapter) { $type = if ((\"$($adapter.Name) $($adapter.InterfaceDescription)\") -match $pattern) { '虚拟网卡' } else { '物理网卡' } }; " +
+                  "[PSCustomObject]@{ InterfaceAlias=$route.InterfaceAlias; NextHop=$route.NextHop; Metric=$route.RouteMetric; Type=$type } " +
+                "}; " +
+                "$routeView | Format-Table -AutoSize | Out-String -Width 200 | Write-Output; " +
+              "} else { Write-Output '无' }; " +
+              "Write-Output ''; " +
+              "Write-Output '== JSON =='; " +
+              "$json = [PSCustomObject]@{Adapters=$adapters; DefaultRoutes=$routes} | ConvertTo-Json -Depth 4; " +
+              "Write-Output \"JSON:$json\""
+          ],
+          displayCommandLine: "PowerShell: 汇总虚拟网卡与默认路由信息"
+        };
+      }
+
+      return unsupportedPlatform("虚拟网卡与路由检测");
+    }
+  },
+  {
     id: "nic_ip_config",
     title: "网卡 IP 配置",
     description: "检查网卡 IP 配置及默认网关信息。",
@@ -385,6 +456,23 @@ const commandDefinitions: CommandRuntimeDefinition[] = [
       }
 
       return unsupportedPlatform("IE 代理检测");
+    }
+  },
+  {
+    id: "winhttp_proxy_check",
+    title: "WinHTTP 代理检测",
+    description: "检查系统 WinHTTP 代理配置（可能与系统代理不同）。",
+    category: "代理",
+    targetHint: "无需填写目标。",
+    defaultTarget: "localhost",
+    supportsCount: false,
+    requiresTarget: false,
+    build: () => {
+      if (isWindows) {
+        return { command: "netsh", args: ["winhttp", "show", "proxy"] };
+      }
+
+      return unsupportedPlatform("WinHTTP 代理检测");
     }
   },
   {

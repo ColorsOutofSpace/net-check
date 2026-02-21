@@ -18,6 +18,7 @@ export interface CommandInput {
 export interface CommandBuildResult {
   command: string;
   args: string[];
+  displayCommandLine?: string;
 }
 
 export interface CommandRuntimeDefinition extends DiagnosticCommandDefinition {
@@ -46,4 +47,23 @@ export type StreamEventType = "start" | "log" | "error" | "complete";
 export interface StreamEvent {
   type: StreamEventType;
   payload: Record<string, unknown>;
+}
+
+export type SignalQuality = "excellent" | "good" | "fair" | "weak" | "none";
+
+export interface RealtimeMetricsSnapshot {
+  timestamp: string;
+  latencyTarget: string;
+  connected: boolean;
+  interfaceName: string;
+  interfaceAlias: string;
+  latencyMs: number | null;
+  downloadBytesPerSecond: number;
+  uploadBytesPerSecond: number;
+  downloadMaxBytesPerSecond: number | null;
+  uploadMaxBytesPerSecond: number | null;
+  signalDbm: number | null;
+  signalPercent: number | null;
+  signalQuality: SignalQuality;
+  note: string;
 }
